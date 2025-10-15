@@ -57,3 +57,6 @@
 /bypy/b
 /bypy/virtual-machines.conf
 *.egg-info
+.vscode
+.history
+
