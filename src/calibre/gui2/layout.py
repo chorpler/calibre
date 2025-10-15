@@ -363,7 +363,8 @@ class MainWindowMixin:  # {{{
         smw = self.shutdown_message_widget
         bg, fg = 200, 'black'
         if QApplication.instance().is_dark_theme:
-            bg, fg = 30, 'lightgray'
+            # bg, fg = 30, 'lightgray'
+            bg, fg = 20, 'red'
         smw.setStyleSheet(f'QLabel {{ background-color: rgba({bg}, {bg}, {bg}, 200); color: {fg} }}')
         smw.setGeometry(0, 0, self.width(), self.height())
         smw.setVisible(True)
