@@ -20,7 +20,6 @@ import unittest
 from calibre.constants import islinux, ismacos, iswindows, plugins_loc
 from calibre.utils.resources import get_image_path as I
 from calibre.utils.resources import get_path as P
-from polyglot.builtins import iteritems
 
 is_ci = os.environ.get('CI', '').lower() == 'true'
 is_sanitized = 'libasan' in os.environ.get('LD_PRELOAD', '')
@@ -81,6 +80,11 @@ class BuildTest(unittest.TestCase):
     def test_pychm(self):
         from chm.chm import CHMFile, chmlib
         del CHMFile, chmlib
+
+    def test_tzdata(self):
+        import tzdata
+        import tzlocal
+        del tzlocal, tzdata
 
     def test_chardet(self):
         from calibre_extensions.uchardet import detect
@@ -215,7 +219,7 @@ class BuildTest(unittest.TestCase):
         d = winutil.localeconv()
         au(d['thousands_sep'], 'localeconv')
         au(d['decimal_point'], 'localeconv')
-        for k, v in iteritems(d):
+        for k, v in d.items():
             au(v, k)
         os.environ['XXXTEST'] = 'YYY'
         self.assertEqual(os.getenv('XXXTEST'), 'YYY')
