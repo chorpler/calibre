@@ -154,7 +154,7 @@ class WhereBox(QComboBox):
 
     def __init__(self, parent, emphasize=False):
         QComboBox.__init__(self)
-        self.addItems([_('Current file'), _('All text files'), _('All style files'), _('All non-binary files'), _('Selected files'), _('Open files'), _('Marked text')])
+        self.addItems([_('Current file'), _('All text files'), _('All style files'), _('Selected files'), _('Open files'), _('Marked text')])
         self.setToolTip('<style>dd {margin-bottom: 1.5ex}</style>' + _(
             '''
             Where to search/replace:
@@ -165,8 +165,6 @@ class WhereBox(QComboBox):
             <dd>Search in all text (HTML) files</dd>
             <dt><b>All style files</b></dt>
             <dd>Search in all style (CSS) files</dd>
-            <dt><b>All non-binary files</b></dt>
-            <dd>Search in HTML, CSS, XML, OPF, NCX files. Ignore media, fonts, and other binary files</dd>
             <dt><b>Selected files</b></dt>
             <dd>Search in the files currently selected in the File browser</dd>
             <dt><b>Open files</b></dt>
@@ -183,12 +181,12 @@ class WhereBox(QComboBox):
 
     @property
     def where(self):
-        wm = {0:'current', 1:'text', 2:'styles', 3:'selected', 4:'open', 5:'selected-text', 6:'nonbin'}
-        self.setCurrentIndex({v:k for k, v in wm.items()}[val])
+        wm = {0:'current', 1:'text', 2:'styles', 3:'selected', 4:'open', 5:'selected-text'}
+        return wm[self.currentIndex()]
 
     @where.setter
     def where(self, val):
-        wm = {0:'current', 1:'text', 2:'styles', 3:'selected', 4:'open', 5:'selected-text', 6:'nonbin'}
+        wm = {0:'current', 1:'text', 2:'styles', 3:'selected', 4:'open', 5:'selected-text'}
         self.setCurrentIndex({v:k for k, v in wm.items()}[val])
 
     def showPopup(self):
