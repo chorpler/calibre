@@ -167,8 +167,9 @@ def install_grype() -> str:
 
 IGNORED_DEPENDENCY_CVES = [
     # Python stdlib
-    'CVE-2025-8194',  # DoS in tarfile
-    'CVE-2025-6069',  # DoS in HTMLParser
+    'CVE-2025-8194',   # DoS in tarfile
+    'CVE-2025-6069',   # DoS in HTMLParser
+    'CVE-2025-13836',  # DoS in http client reading from malicious server
     # glib
     'CVE-2025-4056',  # Only affects Windows, on which we dont use glib
     # libtiff
@@ -182,7 +183,7 @@ IGNORED_DEPENDENCY_CVES = [
     # ffmpeg cannot be updated till Qt starts using FFMPEG 8 and these CVEs are
     # anyway for file types we dont use or support
     'CVE-2025-59733', 'CVE-2025-59731', 'CVE-2025-59732',  # OpenEXR image files, not supported by calibre
-    'CVE-2025-59734',  # SANM decoding unused by calibre
+    'CVE-2025-59730', 'CVE-2025-59734',  # SANM decoding unused by calibre
     'CVE-2025-59729',  # DHAV files unused by calibre ad negligible security impact: https://issuetracker.google.com/issues/433513232
     'CVE-2025-11579',  # Go rardecode package probably from grype's own dependencies calibre does not use Go code
 ]
@@ -235,17 +236,28 @@ def check_dependencies() -> None:
 
 
 def main():
+    action = sys.argv[1]
+
+    if action == 'install':
+        # WebEngine is flaky in macOS CI so install rapydscript so bootstrap wont fail
+        npm = 'npm.cmd' if iswindows else 'npm'
+        run(npm, 'install', 'rapydscript-ng')
+        root = subprocess.check_output([npm, 'root']).decode().strip()
+        with open(os.environ['GITHUB_PATH'], 'a') as f:
+            print(os.path.abspath(os.path.join(root, '.bin')), file=f)
+
     if iswindows:
         import runpy
         m = runpy.run_path('setup/win-ci.py')
         return m['main']()
-    action = sys.argv[1]
+
     if action == 'install':
         install_bundle()
         if not ismacos:
             install_linux_deps()
 
     elif action == 'bootstrap':
+        run('rapydscript', '--version')
         install_env()
         run_python('setup.py bootstrap --ephemeral')
 
@@ -282,7 +294,8 @@ username = api
 
         install_env()
         run_python('setup.py test')
-        run_python('setup.py test_rs')
+        if not ismacos:  # webengine is flaky on macOS
+            run_python('setup.py test_rs')
     else:
         raise SystemExit(f'Unknown action: {action}')
 
