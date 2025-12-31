@@ -493,13 +493,14 @@ def create_defs():
     defs['bookshelf_disk_cache_size'] = 1000
     defs['bookshelf_cache_size_multiple'] = 5
     defs['bookshelf_shadow'] = True
-    defs['bookshelf_thumbnail'] = True
-    defs['bookshelf_centered'] = False
+    defs['bookshelf_thumbnail'] = 'crops'
     defs['bookshelf_variable_height'] = True
-    defs['bookshelf_fade_time'] = 200
-    defs['bookshelf_background'] = {
-        'light': (255, 255, 255), 'dark': (64, 64, 64), 'light_texture': None, 'dark_texture': None
-    }
+    defs['bookshelf_fade_time'] = 400
+    defs['bookshelf_hover'] = 'shift'
+
+    # Migrate beta bookshelf_thumbnail
+    if isinstance(btv := gprefs.get('bookshelf_thumbnail'), bool):
+        gprefs['bookshelf_thumbnail'] = 'full' if btv else 'none'
 
     def migrate_tweak(tweak_name, pref_name):
         # If the tweak has been changed then leave the tweak in the file so
@@ -1813,7 +1814,3 @@ def resolve_custom_background(name: str ,which='color', for_dark: bool | None = 
 
 def resolve_grid_color(which='color', for_dark: bool | None = None, use_defaults: bool = False):
     return resolve_custom_background('cover_grid_background', which=which, for_dark=for_dark, use_defaults=use_defaults)
-
-
-def resolve_bookshelf_color(which='color', for_dark: bool | None = None, use_defaults: bool = False):
-    return resolve_custom_background('bookshelf_background', which=which, for_dark=for_dark, use_defaults=use_defaults)

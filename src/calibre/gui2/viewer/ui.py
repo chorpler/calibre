@@ -119,7 +119,7 @@ class EbookViewer(MainWindow):
         at.open_book_at_path.connect(self.ask_for_open)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, at)
         try:
-            os.makedirs(annotations_dir)
+            os.makedirs(annotations_dir())
         except OSError:
             pass
         self.current_book_data = {}
@@ -660,7 +660,7 @@ class EbookViewer(MainWindow):
             with open(path, 'rb') as f:
                 raw = f.read()
             merge_annotations(parse_annotations(raw), amap)
-        path = os.path.join(annotations_dir, self.current_book_data['annotations_path_key'])
+        path = os.path.join(annotations_dir(), self.current_book_data['annotations_path_key'])
         if os.path.exists(path):
             with open(path, 'rb') as f:
                 raw = f.read()

@@ -622,7 +622,7 @@ class DB:
         ('path', True), ('publisher', False), ('rating', False),
         ('author_sort', False), ('sort', False), ('timestamp', False),
         ('uuid', False), ('comments', True), ('id', False), ('pubdate', False),
-        ('last_modified', False), ('size', False), ('languages', False),
+        ('last_modified', False), ('size', False), ('languages', False), ('pages', False),
         ]
         defs['popup_book_display_fields'] = [('title', True)] + [(f[0], True) for f in defs['book_display_fields'] if f[0] != 'title']
         defs['qv_display_fields'] = [('title', True), ('authors', True), ('series', True)]
@@ -637,10 +637,13 @@ class DB:
         defs['edit_metadata_ignore_display_order'] = False
         defs['fts_enabled'] = False
         defs['column_tooltip_templates'] = {}
-        defs['bookshelf_grouping_mode'] = 'none'
-        defs['bookshelf_color_rules'] = []
+        defs['bookshelf_grouping_mode'] = ''
         defs['bookshelf_title_template'] = '{title}'
-        defs['bookshelf_spine_size_template'] = '{size}'
+        defs['bookshelf_spine_size_template'] = '{pages}'
+
+        # Migrate the beta bookshelf_grouping_mode
+        if self.prefs.get('bookshelf_grouping_mode', '') == 'none':
+            self.prefs.set('bookshelf_grouping_mode', '')
 
         # Migrate the bool tristate tweak
         defs['bools_are_tristate'] = \
@@ -912,7 +915,7 @@ class DB:
     def initialize_tables(self):  # {{{
         tables = self.tables = {}
         for col in ('title', 'sort', 'author_sort', 'series_index', 'comments',
-                'timestamp', 'pubdate', 'uuid', 'path', 'cover',
+                'timestamp', 'pubdate', 'uuid', 'path', 'cover', 'pages',
                 'last_modified'):
             metadata = self.field_metadata[col].copy()
             if col == 'comments':
@@ -943,7 +946,7 @@ class DB:
             'rating':5, 'tags':6, 'comments':7, 'series':8, 'publisher':9,
             'series_index':10, 'sort':11, 'author_sort':12, 'formats':13,
             'path':14, 'pubdate':15, 'uuid':16, 'cover':17, 'au_map':18,
-            'last_modified':19, 'identifiers':20, 'languages':21,
+            'last_modified':19, 'identifiers':20, 'languages':21, 'pages':22,
         }
 
         for k,v in self.FIELD_MAP.items():
@@ -1894,8 +1897,7 @@ class DB:
                         return True
                     except Exception:
                         pass
-                with open(path, 'rb') as f, open(make_long_path_useable(dest), 'wb') as d:
-                    shutil.copyfileobj(f, d)
+                shutil.copyfile(path, make_long_path_useable(dest))
         return True
 
     def windows_check_if_files_in_use(self, paths):
