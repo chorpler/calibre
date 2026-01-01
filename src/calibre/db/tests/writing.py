@@ -718,16 +718,19 @@ class WritingTest(BaseTest):
         ' Test that the composite field cache is properly invalidated on writes '
         cache = self.init_cache()
         cache.create_custom_column('tc', 'TC', 'composite', False, display={
-            'composite_template':'{title} {author_sort} {title_sort} {formats} {tags} {series} {series_index}'})
+            'composite_template':'{title} {author_sort} {title_sort} {formats} {tags} {series} {series_index} {pages}'})
         cache.close()
         cache = self.init_cache()
+        all_book_ids = cache.all_book_ids()
+        current = {}
 
         def test_invalidate():
-            c = self.init_cache()
-            for bid in cache.all_book_ids():
-                self.assertEqual(cache.field_for('#tc', bid), c.field_for('#tc', bid))
-            c.close()
+            nonlocal current
+            nc = {bid:cache.field_for('#tc', bid) for bid in all_book_ids}
+            self.assertNotEqual(current, nc)
+            current = nc
 
+        current = {bid:cache.field_for('#tc', bid) for bid in all_book_ids}
         cache.set_field('title', {1:'xx', 3:'yy'})
         test_invalidate()
         cache.set_field('series_index', {1:9, 3:11})
@@ -741,6 +744,10 @@ class WritingTest(BaseTest):
         cache.remove_formats({1:{'FMT1'}})
         test_invalidate()
         cache.add_format(1, 'ADD', BytesIO(b'xxxx'))
+        test_invalidate()
+        cache.set_pages(1, 13)
+        test_invalidate()
+        cache.set_field('pages', {1:11})
         test_invalidate()
         cache.close()
     # }}}
