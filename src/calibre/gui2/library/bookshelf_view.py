@@ -635,6 +635,7 @@ class ShelfItem(NamedTuple):
     reduce_height_by: int = 0
     book_id: int = 0
     group_name: str = ''
+    is_hover_expanded: bool = False
 
     @property
     def is_divider(self) -> bool:
@@ -647,6 +648,16 @@ class ShelfItem(NamedTuple):
             self.width,
             lc.spine_height - self.reduce_height_by - lc.shelf_gap
         )
+
+    def contains(self, x: int, gap: int = 0) -> bool:
+        return self.start_x <= x < self.start_x + self.width + gap
+
+    def overlap_length(self, X: 'ShelfItem') -> int:
+        xs, xl = X.start_x, X.width
+        ys, yl = self.start_x, self.width
+        xe = xs + xl
+        ye = ys + yl
+        return max(0, min(xe, ye) - max(xs, ys))
 
 
 class CaseItem:
@@ -668,7 +679,26 @@ class CaseItem:
             idx = bisect.bisect_right(self.items, x, key=attrgetter('start_x'))
             if idx > 0:
                 candidate = self.items[idx-1]
-                if x < candidate.start_x + candidate.width + lc.horizontal_gap:
+                if candidate.contains(x, lc.horizontal_gap):
+                    if candidate.is_hover_expanded:
+                        return candidate
+                    if candidate.idx and (prev := self.items[candidate.idx-1]).is_hover_expanded and prev.contains(x):
+                        return prev
+                    if idx < len(self.items) and (n := self.items[idx]).is_hover_expanded and n.contains(x):
+                        return n
+                    return candidate
+        return None
+
+    def book_or_divider_at_region(self, region: ShelfItem, lc: LayoutConstraints) -> ShelfItem | None:
+        if self.items:
+            idx = bisect.bisect_right(self.items, region.start_x, key=attrgetter('start_x'))
+            if idx > 0:
+                candidate = self.items[idx-1]
+                if candidate.contains(region.start_x, lc.horizontal_gap):
+                    if idx < len(self.items):
+                        nc = self.items[idx]
+                        a, b = region.overlap_length(candidate), region.overlap_length(nc)
+                        return candidate if a >= b else nc
                     return candidate
         return None
 
@@ -738,7 +768,7 @@ class CaseItem:
                     if left_shift:
                         item = item._replace(start_x=item.start_x - left_shift)
                 elif i == shelf_item.idx:
-                    item = item._replace(start_x=item.start_x - left_shift, width=width)
+                    item = item._replace(start_x=item.start_x - left_shift, width=width, is_hover_expanded=True)
                 elif right_shift:
                     item = item._replace(start_x=item.start_x + right_shift)
                 ans.items.append(item)
@@ -746,7 +776,7 @@ class CaseItem:
         else:
             ans.items = self.items[:]
             item = ans.items[shelf_item.idx]
-            ans.items[shelf_item.idx] = item._replace(start_x=item.start_x - left_shift, width=width)
+            ans.items[shelf_item.idx] = item._replace(start_x=item.start_x - left_shift, width=width, is_hover_expanded=True)
         return ans
 
 
@@ -1104,7 +1134,7 @@ class BookCase(QObject):
         if shelf_idx < 0 or shelf_idx >= num_shelves:
             return 0
         target_shelf = self.items[shelf_idx * 2]
-        if not (target_si := target_shelf.book_or_divider_at_xpos(si.start_x, self.layout_constraints)):
+        if not (target_si := target_shelf.book_or_divider_at_region(si, self.layout_constraints)):
             return 0
         return ans.book_id if (ans := target_shelf.closest_book_to(target_si.idx)) else 0
 # }}}
@@ -2011,21 +2041,21 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
         si = self.bookcase.book_id_to_item_map.get(self.book_id_from_row(index.row()))
         if si is None:
             return
-        scroll_y = self.verticalScrollBar().value()
         viewport_height = self.viewport().height()
-        top = si.case_start_y - scroll_y
+        shelf_height = self.layout_constraints.step_height
         match hint:
             case QAbstractItemView.ScrollHint.PositionAtTop:
                 y = 0
             case QAbstractItemView.ScrollHint.PositionAtBottom:
-                y = max(0, viewport_height - self.layout_constraints.step_height)
+                y = max(0, viewport_height - shelf_height)
             case QAbstractItemView.ScrollHint.PositionAtCenter:
-                y = max(0, (viewport_height - self.layout_constraints.step_height)//2)
+                y = max(0, (viewport_height - shelf_height)//2)
             case QAbstractItemView.ScrollHint.EnsureVisible:
-                if top >= 0 and top + self.layout_constraints.step_height <= viewport_height:
+                top = si.case_start_y - self.verticalScrollBar().value()
+                if top >= 0 and top + shelf_height <= viewport_height:
                     return
-                y = 0
-        self.verticalScrollBar().setValue(si.case_start_y + y)
+                y = 0 if top < 0 else max(0, viewport_height - shelf_height)
+        self.verticalScrollBar().setValue(si.case_start_y - y)
         self.update_viewport()
 
     def selection_between(self, a: QModelIndex, b: QModelIndex) -> QItemSelection:
