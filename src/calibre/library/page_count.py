@@ -20,7 +20,7 @@ from calibre.ebooks.oeb.polish.container import Container as ContainerBase
 from calibre.ebooks.oeb.polish.parsing import decode_xml, parse
 from calibre.ebooks.oeb.polish.pretty import NON_NAMESPACED_BLOCK_TAGS
 from calibre.ebooks.oeb.polish.toc import get_toc
-from calibre.ptempfile import TemporaryDirectory
+from calibre.ptempfile import TemporaryDirectory, override_base_dir
 from calibre.utils.cleantext import clean_xml_chars
 from calibre.utils.ipc import eintr_retry_call
 from calibre.utils.logging import DevNull
@@ -89,7 +89,8 @@ head_map = {
     'h6': (70, 1),
 }
 default_head_map_value = CHARS_PER_LINE, 0
-blocks = frozenset(NON_NAMESPACED_BLOCK_TAGS) | frozenset(x.upper() for x in NON_NAMESPACED_BLOCK_TAGS)
+blocks = frozenset(NON_NAMESPACED_BLOCK_TAGS) - {'img', 'video'}
+blocks |= frozenset({x.upper() for x in blocks})
 
 
 def count_char(root: etree.Element) -> int:
@@ -100,7 +101,7 @@ def count_char(root: etree.Element) -> int:
         node = pop()
         ans += get_num_of_significant_chars(node)
         for elem in node.iterchildren():
-            if not (isinstance(elem.tag, str) and barename(elem.tag) in blocks):
+            if not isinstance(elem.tag, str) or barename(elem.tag) not in blocks:
                 append(elem)
     return ans
 
@@ -200,7 +201,7 @@ def count_pages(pathtoebook: str, executor: Executor | None = None) -> int:
 
 class Server:
 
-    ALGORITHM = 2
+    ALGORITHM = 3
 
     def __init__(self, max_jobs_per_worker: int = 2048):
         self.worker: subprocess.Popen | None = None
@@ -245,20 +246,23 @@ class Server:
 
 def serve_requests(pipe: Connection) -> None:
     executor = ThreadPoolExecutor()
-    for line in sys.stdin:
+    for i, line in enumerate(sys.stdin):
         path = bytes.fromhex(line.rstrip()).decode()
-        try:
-            result = count_pages(path, executor)
-        except Exception as e:
-            import traceback
-            result = str(e), traceback.format_exc()
-        try:
-            eintr_retry_call(pipe.send, result)
-        except EOFError:
-            break
+        with TemporaryDirectory(suffix=f'.pc{i}') as base_tdir, override_base_dir(base_tdir):
+            try:
+                result = count_pages(path, executor)
+            except Exception as e:
+                import traceback
+                result = str(e), traceback.format_exc()
+            try:
+                eintr_retry_call(pipe.send, result)
+            except EOFError:
+                break
 
 
 def worker_main(pipe_fd: int) -> None:
+    from calibre.utils.formatter import set_template_error_reporter
+    set_template_error_reporter()
     with suppress(KeyboardInterrupt), Connection(pipe_fd, False, True) as pipe:
         serve_requests(pipe)
 
@@ -275,6 +279,10 @@ def test_line_counting(self):
     t(f'<body>{line}<body>{line}', 2)
     t(f'<h1>{h1_line}<p>{line}', 4)
     t('<p>', 0), t('<h1>', 0)
+    r = parse('<p><i>abc')
+    self.assertEqual(count_char(r[1][0]), 3)
+    r = parse('<p><img>')
+    self.assertEqual(count_char(r[1][0]), 1000)
 
 
 def test_page_count(self) -> None:

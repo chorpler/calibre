@@ -19,9 +19,9 @@ from contextlib import contextmanager
 from datetime import datetime
 from functools import partial, wraps
 from io import DEFAULT_BUFFER_SIZE, BytesIO
-from queue import Queue
+from queue import Queue, ShutDown
 from threading import Lock
-from time import mktime, monotonic, sleep, time
+from time import mktime, monotonic, time
 from typing import NamedTuple
 
 from calibre import as_unicode, detect_ncpus, isbytestring
@@ -588,10 +588,14 @@ class Cache:
                 except Exception:
                     if self.backend.fts_enabled:
                         traceback.print_exc()
-                sleep(self.fts_indexing_sleep_time)
+                if stop_dispatch.wait(self.fts_indexing_sleep_time):
+                    break
 
-        while not getattr(dbref(), 'shutting_down', True):
-            x = queue.get()
+        while True:
+            try:
+                x = queue.get()
+            except ShutDown:
+                break
             if x is None:
                 break
             loop_while_more_available()
@@ -1057,7 +1061,7 @@ class Cache:
         raise KeyError(f'No book with id {book_id!r} found in the library')
 
     @read_api
-    def author_data(self, author_ids=None):
+    def author_data(self, author_ids=None) -> dict[int, dict[str, str]]:
         '''
         Return author data as a dictionary with keys: name, sort, link
 
@@ -1781,16 +1785,26 @@ class Cache:
             self.backend.execute('UPDATE books_pages_link SET needs_scan=1')
 
     @write_api
-    def queue_pages_scan(self, book_id: int = 0) -> None:
+    def queue_pages_scan(self, book_id: int = 0, force: bool = False) -> None:
         '''
         Start a scan updating page counts for all books that need a scan.
         If book_id is specified, then only that book is scanned and it is always scanned.
+        When `force` is True, the existing pages value, if any, is discarded so that
+        the book is forcibly rescanned even if the existing value was up-to-date.
         '''
+        book_id = int(book_id)
         if book_id <= 0:
+            if force:
+                self.backend.execute('DELETE FROM books_pages_link')
+                self.fields['pages'].table.book_col_map.clear()
             if len(self.fields['pages'].table.book_col_map) < len(self.fields['uuid'].table.book_col_map):
                 self.backend.execute('INSERT OR IGNORE INTO books_pages_link(book,needs_scan) SELECT id,1 FROM books')
+        elif force:
+            self.backend.execute(f'DELETE FROM books_pages_link WHERE book={book_id}')
+            self.fields['pages'].table.book_col_map.pop(book_id, None)
+            self.backend.execute(f'INSERT INTO books_pages_link(book,needs_scan) VALUES ({book_id},1)')
         else:
-            self.backend.execute(f'UPDATE books_pages_link SET needs_scan=1 WHERE book={int(book_id)}')
+            self.backend.execute(f'UPDATE books_pages_link SET needs_scan=1 WHERE book={book_id}')
         self.maintain_page_counts.queue_scan(book_id)
 
     @write_api
@@ -2970,15 +2984,16 @@ class Cache:
         if stage == 1:
             self.backend.shutdown_fts()
             if self.fts_queue_thread is not None:
-                self.fts_job_queue.put(None)
+                self.fts_job_queue.shutdown(True)
             if hasattr(self, 'fts_dispatch_stop_event'):
                 self.fts_dispatch_stop_event.set()
             return
         # the fts supervisor thread could be in the middle of committing a
         # result to the db, so holding a lock here will cause a deadlock
         if self.fts_queue_thread is not None:
-            self.fts_queue_thread.join()
-            self.fts_queue_thread = None
+            t, self.fts_queue_thread = self.fts_queue_thread, None
+            if not sys.is_finalizing():
+                t.join()
         self.backend.join_fts()
 
     @api
@@ -2988,10 +3003,8 @@ class Cache:
                 return
             self.close_called = True
             self.shutting_down = True
-            m = None
-            if self.maintain_page_counts is not None:
-                m, self.maintain_page_counts = self.maintain_page_counts, None
-                m.shutdown()
+            m, self.maintain_page_counts = self.maintain_page_counts, None
+            m.shutdown()
             self.event_dispatcher.close()
             self._shutdown_fts()
             try:
