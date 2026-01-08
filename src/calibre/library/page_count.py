@@ -178,7 +178,7 @@ def count_pages_txt(pathtoebook: str) -> int:
         text = f.read().decode('utf-8', 'replace')
     e = etree.Element('r')
     e.tail = clean_xml_chars(text)
-    return get_num_of_significant_chars(e) // CHARS_PER_PAGE
+    return ceil(get_num_of_significant_chars(e) / CHARS_PER_PAGE)
 
 
 def count_pages(pathtoebook: str, executor: Executor | None = None) -> int:
@@ -235,7 +235,11 @@ class Server:
         self.worker.stdin.write(encoded_path.encode())
         self.worker.stdin.flush()
         self.tasks_run_by_worker += 1
-        return eintr_retry_call(self.read_pipe.recv)
+        try:
+            return eintr_retry_call(self.read_pipe.recv)
+        except Exception:
+            self.shutdown_worker()
+            raise
 
     def __enter__(self) -> 'Server':
         return self

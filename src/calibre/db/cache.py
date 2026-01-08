@@ -465,6 +465,8 @@ class Cache:
                     field.author_sort_field = self.fields['author_sort']
                 elif name == 'title':
                     field.title_sort_field = self.fields['sort']
+            if self.backend.prefs.get('full_page_scan_requested'):
+                self._queue_pages_scan(by_user=False)
         if self.backend.prefs['update_all_last_mod_dates_on_start']:
             self.update_last_modified(self.all_book_ids())
             self.backend.prefs.set('update_all_last_mod_dates_on_start', False)
@@ -1756,9 +1758,11 @@ class Cache:
             return Pages(int(pages), int(algorithm), str(format), int(format_size),
                          parse_iso8601(timestamp, assume_utc=True))
     @read_api
-    def pages_needs_scan(self, books: Iterable[int]) -> set[int]:
-        ' Return the subset of books that are marked as needing a scan to update page count '
+    def pages_needs_scan(self, books: Iterable[int] = ()) -> set[int]:
+        ' Return the subset of books (or all books if empty) that are marked as needing a scan to update page count '
         books = tuple(books)
+        if not books:
+            return {r[0] for r in self.backend.execute('SELECT book FROM books_pages_link WHERE needs_scan=1')}
         ans = set()
         BATCH_SIZE = self.backend.max_number_of_variables
         for i in range(0, len(books), BATCH_SIZE):
@@ -1785,7 +1789,7 @@ class Cache:
             self.backend.execute('UPDATE books_pages_link SET needs_scan=1')
 
     @write_api
-    def queue_pages_scan(self, book_id: int = 0, force: bool = False) -> None:
+    def queue_pages_scan(self, book_id: int = 0, force: bool = False, by_user: bool = True) -> None:
         '''
         Start a scan updating page counts for all books that need a scan.
         If book_id is specified, then only that book is scanned and it is always scanned.
@@ -1799,6 +1803,8 @@ class Cache:
                 self.fields['pages'].table.book_col_map.clear()
             if len(self.fields['pages'].table.book_col_map) < len(self.fields['uuid'].table.book_col_map):
                 self.backend.execute('INSERT OR IGNORE INTO books_pages_link(book,needs_scan) SELECT id,1 FROM books')
+            if by_user:
+                self._set_pref('full_page_scan_requested', True)
         elif force:
             self.backend.execute(f'DELETE FROM books_pages_link WHERE book={book_id}')
             self.fields['pages'].table.book_col_map.pop(book_id, None)
@@ -1806,6 +1812,10 @@ class Cache:
         else:
             self.backend.execute(f'UPDATE books_pages_link SET needs_scan=1 WHERE book={book_id}')
         self.maintain_page_counts.queue_scan(book_id)
+
+    @property
+    def page_count_failures_log_path(self) -> str:
+        return self.maintain_page_counts.failure_log_path
 
     @write_api
     def set_pages(
@@ -2221,6 +2231,8 @@ class Cache:
                 run_plugins_on_postdelete(self, book_id, fmt)
 
         self._update_last_modified(tuple(formats_map))
+        for book_id in formats_map:
+            self._queue_pages_scan(book_id)
         self.event_dispatcher(EventType.formats_removed, formats_map)
         return removed_map
 
@@ -3066,6 +3078,7 @@ class Cache:
         self.format_metadata_cache.pop(book_id, None)
         max_size = self.fields['formats'].table.update_fmt(book_id, fmt, fname, size, self.backend)
         self.fields['size'].table.update_sizes({book_id: max_size})
+        self._queue_pages_scan(book_id)
         self.event_dispatcher(EventType.format_added, book_id, fmt)
         self.backend.remove_trash_formats_dir_if_empty(book_id)
 
@@ -3095,6 +3108,7 @@ class Cache:
             self._set_field('cover', {book_id:1})
         if annotations:
             self._restore_annotations(book_id, annotations)
+        self._queue_pages_scan(book_id)
 
     @write_api
     def delete_trash_entry(self, book_id, category):
@@ -3121,6 +3135,7 @@ class Cache:
         self.fields['path'].table.set_path(book_id, path, self.backend)
         if annotations:
             self._restore_annotations(book_id, annotations)
+        self._queue_pages_scan(book_id)
 
     @read_api
     def virtual_libraries_for_books(self, book_ids, virtual_fields=None):

@@ -422,6 +422,7 @@ def create_defs():
     defs['tags_browser_category_icons'] = {}
     defs['tags_browser_value_icons'] = {}
     defs['cover_browser_reflections'] = True
+    defs['cover_browser_max_font_size'] = 11
     defs['book_list_extra_row_spacing'] = 0
     defs['refresh_book_list_on_bulk_edit'] = True
     defs['cover_grid_width'] = 0
@@ -500,6 +501,7 @@ def create_defs():
     defs['bookshelf_hover'] = 'shift'
     defs['bookshelf_up_to_down'] = False
     defs['bookshelf_height'] = 119
+    defs['bookshelf_make_space_for_second_line'] = False
 
     # Migrate beta bookshelf_thumbnail
     if isinstance(btv := gprefs.get('bookshelf_thumbnail'), bool):
@@ -1219,6 +1221,10 @@ class Application(QApplication):
             args.extend(('-platformpluginpath', plugins_loc, '-platform', os.environ.get('CALIBRE_HEADLESS_PLATFORM', 'headless')))
         else:
             args.extend(self.palette_manager.args_to_qt)
+        # We disable GPU acceleration as it causes crashes/black screen in some Windows systems and
+        # isnt really needed for performance for our use cases.
+        if not tweaks['qt_webengine_uses_gpu']:
+            args.extend(('--webEngineArgs', '--disable-gpu'))
         self.headless = headless
         from calibre_extensions import progress_indicator
         self.pi = progress_indicator
@@ -1599,11 +1605,8 @@ def ensure_app(headless=True):
             has_headless = ismacos or islinux or isbsd
             if headless and has_headless:
                 args += ['-platformpluginpath', plugins_loc, '-platform', os.environ.get('CALIBRE_HEADLESS_PLATFORM', 'headless')]
-                if isbsd:
-                    val = os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS', '')
-                    if val:
-                        val += ' '
-                    os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = f'{val}--disable-gpu'
+                # WebEngine GPU not needed in headless mode
+                args += ['--webEngineArgs', '--disable-gpu']
                 if ismacos:
                     os.environ['QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM'] = '1'
             if headless and iswindows:
