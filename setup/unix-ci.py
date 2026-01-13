@@ -4,7 +4,7 @@
 
 import glob
 import io
-import json
+import lzma
 import os
 import shlex
 import subprocess
@@ -167,48 +167,28 @@ def get_tx():
         tf.extract('tx', filter='fully_trusted')
 
 
-def install_grype() -> str:
-    dest = '/tmp'
-    rq = Request('https://api.github.com/repos/anchore/grype/releases/latest', headers={
-        'Accept': 'application/vnd.github.v3+json',
-    })
-    m = json.loads(download_with_retry(rq))
-    for asset in m['assets']:
-        if asset['name'].endswith('_linux_amd64.tar.gz'):
-            url = asset['browser_download_url']
-            break
-    else:
-        raise ValueError('Could not find linux binary for grype')
-    os.makedirs(dest, exist_ok=True)
-    data = download_with_retry(url)
-    with tarfile.open(fileobj=io.BytesIO(data), mode='r') as tf:
-        tf.extract('grype', path=dest, filter='fully_trusted')
-    exe = os.path.join(dest, 'grype')
+def install_grype(exe: str = '/tmp/grype') -> str:
+    raw = download_with_retry('https://download.calibre-ebook.com/ci/grype.xz')
+    raw = lzma.decompress(raw)
+    with open(exe, 'wb') as f:
+        f.write(raw)
+        os.fchmod(f.fileno(), 0o755)
     subprocess.check_call([exe, 'db', 'update'])
     return exe
 
 
 IGNORED_DEPENDENCY_CVES = [
-    # Python stdlib
-    'CVE-2025-8194',   # DoS in tarfile
-    'CVE-2025-6069',   # DoS in HTMLParser
-    'CVE-2025-13836',  # DoS in http client reading from malicious server
-    # glib
-    'CVE-2025-4056',  # Only affects Windows, on which we dont use glib
     # libtiff
     'CVE-2025-8851',  # this is erroneously marked as fixed in the database but no release of libtiff has been made with the fix
     # hyphen
     'CVE-2017-1000376',  # false match in the database
     # espeak
     'CVE-2023-4990',  # false match because we currently build with a specific commit pending release of espeak 1.53
-    # Qt
-    'CVE-2025-5683',  # we dont use the ICNS image format
     # ffmpeg cannot be updated till Qt starts using FFMPEG 8 and these CVEs are
     # anyway for file types we dont use or support
     'CVE-2025-59733', 'CVE-2025-59731', 'CVE-2025-59732',  # OpenEXR image files, not supported by calibre
     'CVE-2025-59730', 'CVE-2025-59734',  # SANM decoding unused by calibre
     'CVE-2025-59729',  # DHAV files unused by calibre ad negligible security impact: https://issuetracker.google.com/issues/433513232
-    'CVE-2025-11579',  # Go rardecode package probably from grype's own dependencies calibre does not use Go code
 ]
 
 
