@@ -74,10 +74,12 @@ from calibre.ebooks.metadata import authors_to_string, rating_to_stars
 from calibre.gui2 import config, gprefs, resolve_bookshelf_color
 from calibre.gui2.library.alternate_views import (
     ClickStartData,
+    cached_emblem,
     double_click_action,
     handle_enter_press,
     handle_selection_click,
     handle_selection_drag,
+    render_emblem,
     selection_for_rows,
     setup_dnd_interface,
 )
@@ -116,11 +118,11 @@ def normalised_size(size_bytes: int) -> float:
 
 
 def render_spine_text_as_pixmap(
-    text: str, font: QFont, fm: QFontMetricsF, size: QSize, vertical_alignment: Qt.AlignmentFlag, rotation: int,
+    text: str, font: QFont, fm: QFontMetricsF, size: QSize, vertical_alignment: Qt.AlignmentFlag, downwards: bool,
     outline_width: float, device_pixel_ratio: float, text_color: QColor, outline_color: QColor,
 ) -> QPixmap:
     ss = (QSizeF(size) * device_pixel_ratio).toSize()
-    key = f'{font.key()}{ss.width()}{ss.height()}{int(vertical_alignment)}{rotation}{outline_width}{text_color.rgb()}{outline_color.rgb()}{text}'
+    key = f'{font.key()}{ss.width()}{ss.height()}{int(vertical_alignment)}{int(downwards)}{outline_width}{text_color.rgb()}{outline_color.rgb()}{text}'
     if pmap := QPixmapCache.find(key):
         return pmap
     ans = QImage(ss.height(), ss.width(), QImage.Format_ARGB32_Premultiplied)
@@ -130,8 +132,12 @@ def render_spine_text_as_pixmap(
         painter.setRenderHint(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
         painter.setFont(font)
         sz = ans.deviceIndependentSize().transposed()
-        painter.translate(0, sz.width())
-        painter.rotate(rotation)
+        if downwards:
+            painter.translate(sz.height(), 0)
+            painter.rotate(90)
+        else:
+            painter.translate(0, sz.width())
+            painter.rotate(-90)
         flags = vertical_alignment | Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextSingleLine
         if outline_width > 0:
             # Calculate text dimensions
@@ -818,6 +824,7 @@ class CaseItem:
     height: int = 0
     idx: int = 0
     items: list[ShelfItem] | None = None
+    expanded_item: ShelfItem | None = None
 
     def __init__(self, y: int = 0, height: int = 0, is_shelf: bool = False, idx: int = 0):
         self.start_y = y
@@ -920,7 +927,7 @@ class CaseItem:
                     if left_shift:
                         item = item._replace(start_x=item.start_x - left_shift)
                 elif i == shelf_item.idx:
-                    item = item._replace(start_x=item.start_x - left_shift, width=width, is_hover_expanded=True)
+                    item = ans.expanded_item = item._replace(start_x=item.start_x - left_shift, width=width, is_hover_expanded=True)
                 elif right_shift:
                     item = item._replace(start_x=item.start_x + right_shift)
                 ans.items.append(item)
@@ -928,7 +935,7 @@ class CaseItem:
         else:
             ans.items = self.items[:]
             item = ans.items[shelf_item.idx]
-            ans.items[shelf_item.idx] = item._replace(start_x=item.start_x - left_shift, width=width, is_hover_expanded=True)
+            ans.items[shelf_item.idx] = ans.expanded_item = item._replace(start_x=item.start_x - left_shift, width=width, is_hover_expanded=True)
         return ans
 
 
@@ -1513,7 +1520,6 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
         # Cover template caching
         self.template_inited = False
         self.emblem_rules = []
-        self.template_cache = {}
         self.template_is_empty = {}
         self.first_line_renderer = self.build_template_renderer('title', '{title}')
         self.second_line_renderer = self.build_template_renderer('authors', '')
@@ -1587,7 +1593,6 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
         def db_pref(key):
             return db.new_api.pref(key, get_default_from_defaults=True)
 
-        self.template_cache = {}
         title = db_pref('bookshelf_title_template') or ''
         self.first_line_renderer = self.build_template_renderer('title', title)
         authors = db_pref('bookshelf_author_template') or ''
@@ -1605,6 +1610,8 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
         self.init_template(db)
         if self.template_is_empty[column_name]:
             return ''
+        if not (m := self.model()):
+            return ''
         match template:
             case '{title}':
                 return db.field_for('title', book_id)
@@ -1616,21 +1623,21 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
                 return db.field_for('sort', book_id)
         mi = db.get_proxy_metadata(book_id)
         rslt = mi.formatter.safe_format(
-            template, mi, TEMPLATE_ERROR, mi, column_name=column_name, template_cache=self.template_cache)
+            template, mi, TEMPLATE_ERROR, mi, column_name=column_name, template_cache=m.bookshelf_template_cache)
         return rslt or ''
 
     def render_emblem(self, book_id: int) -> str:
-        if not (db := self.dbref()):
-            return ''
+        if not (m := self.model()):
+            return
+        db = m.db.new_api
         self.init_template(db)
         if not self.emblem_rules:
             return ''
-        mi = db.get_proxy_metadata(book_id)
-        for (x,y,t) in self.emblem_rules:
-            rslt = mi.formatter.safe_format(
-                t, mi, TEMPLATE_ERROR, mi, column_name='bookshelf_emblem', template_cache=self.template_cache)
-            if rslt:
-                return rslt
+        mi = None
+        for i, (kind, column, rule) in enumerate(self.emblem_rules):
+            icon_name, mi = render_emblem(book_id, rule, i, m.bookshelf_emblem_cache, mi, db, m.formatter, m.bookshelf_template_cache, column_name='bookshelf')
+            if icon_name:
+                return icon_name
         return ''
 
     def refresh_settings(self):
@@ -1837,10 +1844,11 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
             return
         self.viewport().update()
 
-    def draw_emblems(self, painter: QPainter, item: ShelfItem, scroll_y: int) -> None:
+    def draw_emblems(self, painter: QPainter, item: ShelfItem, scroll_y: int) -> tuple[int, int]:
         book_id = item.book_id
         above, below = [], []
         top, bottom = [], []
+        top_size = bottom_size = 0
         if m := self.model():
             from calibre.gui2.ui import get_gui
             db = m.db
@@ -1851,10 +1859,8 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
             device_connected = get_gui().device_connected is not None
             on_device = device_connected and db.field_for('ondevice', book_id)
             if on_device:
-                if getattr(self, 'on_device_icon', None) is None:
-                    self.on_device_icon = QIcon.cached_icon('ok.png')
                 which = above if below else below
-                which.append(self.on_device_icon)
+                which.append(cached_emblem(0, m.bookshelf_bitmap_cache, ':ondevice'))
             custom = self.render_emblem(book_id)
             if custom:
                 match gprefs['bookshelf_emblem_position']:
@@ -1868,9 +1874,11 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
                         which = bottom
                     case _:
                         which = above if below and not above else below
-                which.append(QIcon.cached_icon(custom))
+                if (icon := cached_emblem(0, m.bookshelf_bitmap_cache, custom)) is not None:
+                    which.append(icon)
 
         def draw_horizontal(emblems: list[QIcon], position: str) -> None:
+            nonlocal top_size, bottom_size
             if not emblems:
                 return
             gap = self.EMBLEM_MARGIN
@@ -1896,8 +1904,10 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
                     y += lc.spine_height
                 case 'top':
                     y += lc.shelf_gap + item.reduce_height_by + self.EMBLEM_MARGIN
+                    top_size = sz + self.EMBLEM_MARGIN
                 case 'bottom':
                     y += lc.spine_height - sz - self.EMBLEM_MARGIN
+                    bottom_size = sz + self.EMBLEM_MARGIN
             for ic in emblems:
                 p = ic.pixmap(sz, sz)
                 painter.drawPixmap(QPoint(x, y), p)
@@ -1906,6 +1916,7 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
         draw_horizontal(below, 'below')
         draw_horizontal(top, 'top')
         draw_horizontal(bottom, 'bottom')
+        return top_size, bottom_size
 
     def paintEvent(self, ev: QPaintEvent) -> None:
         '''Paint the bookshelf view.'''
@@ -1945,19 +1956,19 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
             self.draw_shelf_base(painter, base, scroll_y, self.width(), base.idx % n)
         for shelf, has_expanded in shelves:
             # Draw books and inline dividers on it
+            if has_expanded:
+                hovered_item = shelf.expanded_item
             for item in shelf.items:
                 if item.is_divider:
                     self.draw_inline_divider(painter, item, scroll_y)
                     continue
-                if has_expanded and self.expanded_cover.is_expanded(item.book_id):
-                    hovered_item = item
-                else:
+                if item is not shelf.expanded_item:
                     # Draw a book spine at this position
+                    should_draw_emblems = not has_expanded or gprefs['bookshelf_hover'] != 'above' \
+                        or (item.start_x + (item.width / 2) < hovered_item.start_x) \
+                        or (item.start_x + (item.width / 2) > hovered_item.start_x + hovered_item.width)
                     row = self.bookcase.book_id_to_row_map[item.book_id]
-                    self.draw_spine(painter, item, scroll_y, sm.isRowSelected(row), row == current_row)
-                if gprefs['bookshelf_hover'] != 'above' or not hovered_item \
-                    or (item.start_x + (item.width / 2) > hovered_item.start_x + hovered_item.width):
-                    self.draw_emblems(painter, item, scroll_y)
+                    self.draw_spine(painter, item, scroll_y, sm.isRowSelected(row), row == current_row, should_draw_emblems)
         if hovered_item is not None:
             row = self.bookcase.book_id_to_row_map[hovered_item.book_id]
             is_selected, is_current = sm.isRowSelected(row), row == current_row
@@ -2122,8 +2133,10 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
         sz = (QSizeF(lc.hover_expanded_width, lc.spine_height) * self.devicePixelRatioF()).toSize()
         return default_cover_pixmap(sz.width(), sz.height())
 
-    def draw_spine(self, painter: QPainter, spine: ShelfItem, scroll_y: int, is_selected: bool, is_current: bool):
-        '''Draw a book spine.'''
+    def draw_spine(
+        self, painter: QPainter, spine: ShelfItem, scroll_y: int, is_selected: bool, is_current: bool,
+        should_draw_emblems: bool,
+    ):
         lc = self.layout_constraints
         spine_rect = spine.rect(lc).translated(0, -scroll_y)
         thumbnail = self.cover_cache.thumbnail_as_pixmap(spine.book_id)
@@ -2151,8 +2164,12 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
         if color.isValid():
             self.draw_selection_highlight(painter, spine_rect, color)
 
+        top_emblem_size = bottom_emblem_size = 0
+        if should_draw_emblems:
+            top_emblem_size, bottom_emblem_size = self.draw_emblems(painter, spine, scroll_y)
+
         # Draw title (rotated vertically)
-        self.draw_spine_title(painter, spine_rect, spine_color, spine.book_id)
+        self.draw_spine_title(painter, spine_rect, spine_color, spine.book_id, top_emblem_size, bottom_emblem_size)
 
     def selection_highlight_color(self, is_selected: bool, is_current: bool) -> QColor:
         if is_current and is_selected:
@@ -2180,7 +2197,10 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
         painter.fillRect(rect, QBrush(vertical_gradient))
         painter.restore()
 
-    def draw_spine_title(self, painter: QPainter, rect: QRect, spine_color: QColor, book_id: int) -> None:
+    def draw_spine_title(
+        self, painter: QPainter, rect: QRect, spine_color: QColor, book_id: int,
+        top_emblem_size: int, bottom_emblem_size: int,
+    ) -> None:
         '''Draw vertically the title on the spine.'''
         first_line, second_line = self.first_line_renderer(book_id), self.second_line_renderer(book_id)
         margin = self.TEXT_MARGIN
@@ -2194,17 +2214,14 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
             else:
                 first_rect = QRect(rect.left(), rect.top() + margin, rect.width(), rect.height() - 2*margin)
                 second_rect = QRect()
-            emblem_size = -margin + (self.EMBLEM_MARGIN * 2)
-            emblem_size += min(rect.width() - self.EMBLEM_MARGIN, self.EMBLEM_SIZE)
-            match gprefs['bookshelf_emblem_position']:
-                case 'top':
-                    first_rect.adjust(0, emblem_size, 0, 0)
-                    if has_two_lines:
-                        second_rect.adjust(0, emblem_size, 0, 0)
-                case 'bottom':
-                    first_rect.adjust(0, 0, 0, -emblem_size)
-                    if has_two_lines:
-                        second_rect.adjust(0, 0, 0, -emblem_size)
+            if top_emblem_size:
+                first_rect.adjust(0, top_emblem_size, 0, 0)
+                if has_two_lines:
+                    second_rect.adjust(0, top_emblem_size, 0, 0)
+            if bottom_emblem_size:
+                first_rect.adjust(0, 0, 0, -bottom_emblem_size)
+                if has_two_lines:
+                    second_rect.adjust(0, 0, 0, -bottom_emblem_size)
             return first_rect, second_rect
 
         first_rect, second_rect = calculate_rects(bool(second_line))
@@ -2223,11 +2240,10 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
 
         # Determine text color based on spine background brightness
         text_color, outline_color = self.get_contrasting_text_color(spine_color)
-        rotation = 90 if gprefs['bookshelf_up_to_down'] else -90
 
         def draw_text(text: str, rect: QRect, alignment: Qt.AlignmentFlag) -> None:
             pixmap = render_spine_text_as_pixmap(
-                text, font, fm, rect.transposed().size(), alignment, rotation,
+                text, font, fm, rect.transposed().size(), alignment, gprefs['bookshelf_up_to_down'],
                 self.outline_width, self.devicePixelRatioF(), text_color, outline_color)
             painter.drawPixmap(rect.topLeft(), pixmap)
         if second_line:
