@@ -180,9 +180,10 @@ def install_grype(exe: str = '/tmp/grype') -> str:
 IGNORED_DEPENDENCY_CVES = [
     # python stdlib all these are erroneously marked as fixed in python 3.15
     # when it hasnt even been released. Sigh.
+    'CVE-2026-1299',
     'CVE-2026-0865',
-    'CVE-2025-15282',
     'CVE-2026-0672',
+    'CVE-2025-15282',
     'CVE-2025-15366',
     'CVE-2025-15367',
     'CVE-2025-12781',
@@ -198,6 +199,7 @@ IGNORED_DEPENDENCY_CVES = [
     'CVE-2025-59733', 'CVE-2025-59731', 'CVE-2025-59732',  # OpenEXR image files, not supported by calibre
     'CVE-2025-59730', 'CVE-2025-59734',  # SANM decoding unused by calibre
     'CVE-2025-59729',  # DHAV files unused by calibre ad negligible security impact: https://issuetracker.google.com/issues/433513232
+    'CVE-2025-25469', 'CVE-2025-25468',  # memory leak, not a security issue
 ]
 
 
@@ -237,7 +239,7 @@ def check_dependencies() -> None:
     print('Testing against the SBOM', flush=True)
     import runpy
     orig = sys.argv, sys.stdout
-    sys.argv = ['bypy', 'sbom', 'calibre', '1.0.0']
+    sys.argv = ['bypy', 'sbom', 'kovidgoyal/calibre', '1.0.0']
     buf = io.StringIO()
     sys.stdout = buf
     runpy.run_path('bypy-src')

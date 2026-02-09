@@ -5,6 +5,7 @@ __license__ = 'GPL v3'
 __copyright__ = '2013, Kovid Goyal <kovid at kovidgoyal.net>'
 
 import itertools
+import math
 import os
 import weakref
 from collections import namedtuple
@@ -468,9 +469,12 @@ def setup_dnd_interface(cls_or_self):
         self = cls_or_self
         self.drag_allowed = True
         self.drag_start_pos = None
-        self.setDragEnabled(True)
-        self.setDragDropOverwriteMode(False)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        if isinstance(self, QAbstractItemView):
+            self.setDragEnabled(True)
+            self.setDragDropOverwriteMode(False)
+            self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        else:
+            self.setAcceptDrops(True)
 # }}}
 
 
@@ -744,10 +748,11 @@ class CoverDelegate(QStyledItemDelegate):
             else:
                 if self.animating is not None and self.animating.row() == index.row():
                     cover = cover.scaled(cover.size() * self._animated_size)
-                dpr = cover.devicePixelRatio()
-                cw, ch = int(cover.width() / dpr), int(cover.height() / dpr)
-                dx = max(0, int((rect.width() - cw)/2.0))
-                dy = max(0, int((rect.height() - ch)/2.0))
+                cover = QPixmap(cover)
+                cover.setDevicePixelRatio(painter.device().devicePixelRatioF())
+                sz = cover.deviceIndependentSize()
+                dx = max(0, int((rect.width() - sz.width())/2.0))
+                dy = max(0, int((rect.height() - sz.height())/2.0))
                 right_adjust = dx
                 rect.adjust(dx, dy, -dx, -dy)
                 self.paint_cover(painter, rect, cover)
@@ -1135,6 +1140,22 @@ class GridView(MomentumScrollMixin, QListView):
                                 self._ncols = j.row() - i.row() + 1
                                 return self._ncols
         return self._ncols
+
+    def default_wheel_event_handler(self, ev):
+        if ev.phase() not in (Qt.ScrollPhase.ScrollUpdate, Qt.ScrollPhase.NoScrollPhase, Qt.ScrollPhase.ScrollMomentum):
+            return
+        number_of_pixels = ev.pixelDelta()
+        number_of_degrees = ev.angleDelta() / 8.0
+        b = self.verticalScrollBar()
+        if number_of_pixels.isNull() or islinux:
+            # pixelDelta() is broken on linux with wheel mice
+            dy = number_of_degrees.y() / 15.0
+            # Scroll by approximately half a row
+            dy = math.ceil((dy) * b.singleStep() / 2.0)
+        else:
+            dy = number_of_pixels.y()
+        if abs(dy) > 0:
+            b.setValue(b.value() - dy)
 
     def keyPressEvent(self, ev):
         if handle_enter_press(self, ev, self.start_view_animation, False):
