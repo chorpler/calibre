@@ -38,13 +38,8 @@ def split_lines(chunk, length=80):
 
 
 def save_annots_to_epub(path, serialized_annots):
-    try:
-        zf = open(path, 'r+b')
-    except OSError:
-        return
-    with zf:
-        serialized_annots = EPUB_FILE_TYPE_MAGIC + b'\n'.join(split_lines(as_base64_bytes(serialized_annots)))
-        safe_replace(zf, 'META-INF/calibre_bookmarks.txt', BytesIO(serialized_annots), add_missing=True)
+    serialized_annots = EPUB_FILE_TYPE_MAGIC + b'\n'.join(split_lines(as_base64_bytes(serialized_annots)))
+    safe_replace(path, 'META-INF/calibre_bookmarks.txt', BytesIO(serialized_annots), add_missing=True)
 
 
 def save_annotations(annotations_list, annotations_path_key, bld, pathtoebook, in_book_file, sync_annots_user, calibre_data, last_read_data=None):
@@ -67,19 +62,20 @@ class AnnotationsSaveWorker(Thread):
         self.queue = Queue()
 
     def shutdown(self):
-        self.queue.shutdown(True)
+        self.queue.shutdown(immediate=False)
+        self.join()
 
     def run(self):
         while True:
             try:
                 x = self.queue.get()
-                while True:
-                    try:
-                        x = self.queue.get_nowait()
-                    except Empty:
-                        break
             except ShutDown:
                 break
+            while True:
+                try:
+                    x = self.queue.get_nowait()
+                except (Empty, ShutDown):
+                    break
             annotations_list = x['annotations_list']
             annotations_path_key = x['annotations_path_key']
             bld = x['book_library_details']
