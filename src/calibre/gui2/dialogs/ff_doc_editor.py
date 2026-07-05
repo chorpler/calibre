@@ -11,14 +11,15 @@ Created on 12 Nov 2024
 @author: chaley
 '''
 
-from qt.core import QApplication, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QSize, QTimer
+from qt.core import QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QSize, QTimer
 
 from calibre.constants import iswindows
-from calibre.gui2 import gprefs
+from calibre.gui2 import gprefs, qapplication_or_fail
 from calibre.gui2.dialogs.template_general_info import GeneralInformationDialog
 from calibre.gui2.widgets2 import Dialog, HTMLDisplay
 from calibre.utils.ffml_processor import FFMLProcessor
 from calibre.utils.formatter_functions import formatter_functions
+from calibre.utils.localization import _
 
 
 class FFDocEditor(Dialog):
@@ -40,7 +41,7 @@ class FFDocEditor(Dialog):
         return self.editable_text_widget.toPlainText()
 
     def copy_text(self):
-        QApplication.instance().clipboard().setText(self.document_text())
+        qapplication_or_fail().clipboard().setText(self.document_text())
 
     def html_widget(self, layout, row, column):
         e = HTMLDisplay()

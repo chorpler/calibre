@@ -42,7 +42,7 @@ from qt.core import (
 
 from calibre.constants import iswindows
 from calibre.ebooks.metadata import rating_to_stars, title_sort
-from calibre.gui2 import UNDEFINED_QDATETIME, gprefs, rating_font
+from calibre.gui2 import UNDEFINED_QDATETIME, gprefs, qapplication_or_fail, rating_font
 from calibre.gui2.complete2 import EditWithComplete
 from calibre.gui2.dialogs.comments_dialog import CommentsDialog, PlainTextDialog
 from calibre.gui2.dialogs.tag_editor import TagEditor
@@ -55,6 +55,7 @@ from calibre.library.comments import markdown
 from calibre.utils.config import tweaks
 from calibre.utils.date import format_date, internal_iso_format_string, is_date_undefined, now, qt_from_dt, qt_to_dt
 from calibre.utils.icu import sort_key
+from calibre.utils.localization import _
 
 
 class UpdateEditorGeometry:
@@ -869,7 +870,7 @@ class CcBoolDelegate(StyledItemDelegate, UpdateEditorGeometry):  # {{{
         self.nuke_option_data = True
         super().paint(painter, option, index)
         self.nuke_option_data = False
-        style = option.styleObject.style() if option.styleObject else QApplication.instance().style()
+        style = option.styleObject.style() if option.styleObject else qapplication_or_fail().style()
         style.drawItemPixmap(painter, option.rect, Qt.AlignmentFlag.AlignCenter, icon)
 
 # }}}

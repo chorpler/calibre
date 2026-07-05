@@ -14,6 +14,7 @@ from calibre.constants import numeric_version
 from calibre.customize import FileTypePlugin, InterfaceActionBase, MetadataReaderPlugin, MetadataWriterPlugin, PreferencesPlugin, StoreBase
 from calibre.ebooks.html.to_zip import HTML2ZIP
 from calibre.ebooks.metadata.archive import ArchiveExtract, KPFExtract, get_comic_metadata
+from calibre.utils.localization import _
 
 plugins = []
 
@@ -1819,17 +1820,6 @@ class StoreMobileReadStore(StoreBase):
     formats = ['EPUB', 'IMP', 'LRF', 'LIT', 'MOBI', 'PDF']
 
 
-class StoreNextoStore(StoreBase):
-    name = 'Nexto'
-    author = 'Tomasz Długosz'
-    description = 'Największy w Polsce sklep internetowy z audiobookami mp3, ebookami pdf oraz prasą do pobrania on-line.'
-    actual_plugin = 'calibre.gui2.store.stores.nexto_plugin:NextoStore'
-
-    headquarters = 'PL'
-    formats = ['EPUB', 'MOBI', 'PDF']
-    affiliate = True
-
-
 class StoreOzonRUStore(StoreBase):
     name = 'OZON.ru'
     description = 'e-books from OZON.ru'
@@ -1972,7 +1962,6 @@ plugins += [
     StoreManyBooksStore,
     StoreMillsBoonUKStore,
     StoreMobileReadStore,
-    StoreNextoStore,
     StoreOzonRUStore,
     StorePragmaticBookshelfStore,
     StorePublioStore,

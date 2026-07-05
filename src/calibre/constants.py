@@ -12,7 +12,7 @@ from functools import lru_cache
 from polyglot.builtins import environ_item, hasenv
 
 __appname__   = 'calibre'
-numeric_version = (9, 10, 0)
+numeric_version = (9, 11, 0)
 __version__   = '.'.join(map(str, numeric_version))
 git_version   = None
 __author__    = 'Kovid Goyal <kovid@kovidgoyal.net>'
@@ -442,6 +442,7 @@ def get_version():
 
 
 def get_appname_for_display():
+    from calibre.utils.localization import _
     ans = __appname__
     if isportable:
         ans = _('{} Portable').format(ans)
@@ -481,6 +482,7 @@ def get_windows_number_formats():
 
 
 def trash_name():
+    from calibre.utils.localization import _
     return _('Trash') if ismacos else _('Recycle Bin')
 
 

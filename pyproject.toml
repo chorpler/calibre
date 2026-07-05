@@ -281,5 +281,5 @@ exclude = [
     "src/tinycss/",
 ]
 
-[tool.pylsp-mypy]
-enabled = false
+[tool.ty.environment]
+root = ['./src', './stubs', './setup', './recipes']

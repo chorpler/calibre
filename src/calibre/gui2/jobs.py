@@ -48,7 +48,7 @@ from qt.core import (
 from calibre import __appname__, as_unicode, strftime
 from calibre.constants import isbsd, islinux
 from calibre.db.utils import human_readable_interval
-from calibre.gui2 import Dispatcher, config, error_dialog, gprefs, question_dialog
+from calibre.gui2 import Dispatcher, config, error_dialog, gprefs, qapplication_or_fail, question_dialog
 from calibre.gui2.device import DeviceJob
 from calibre.gui2.dialogs.jobs_ui import Ui_JobsDialog
 from calibre.gui2.progress_indicator import ProgressIndicator
@@ -58,7 +58,7 @@ from calibre.startup import connect_lambda
 from calibre.utils.icu import lower
 from calibre.utils.ipc.job import ParallelJob
 from calibre.utils.ipc.server import Server
-from calibre.utils.localization import ngettext
+from calibre.utils.localization import _, ngettext
 from calibre.utils.search_query_parser import ParseException, SearchQueryParser
 
 
@@ -458,7 +458,7 @@ class DetailView(Dialog):  # {{{
         return self.log.toPlainText()
 
     def copy_to_clipboard(self):
-        QApplication.instance().clipboard().setText(self.plain_text)
+        qapplication_or_fail().clipboard().setText(self.plain_text)
 
     def setup_ui(self):
         self.l = l = QVBoxLayout(self)

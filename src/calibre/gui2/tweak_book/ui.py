@@ -10,7 +10,6 @@ from itertools import product
 
 from qt.core import (
     QAction,
-    QApplication,
     QDockWidget,
     QEvent,
     QHBoxLayout,
@@ -32,7 +31,7 @@ from qt.core import (
 from calibre import prints
 from calibre.constants import DEBUG, __appname__, get_version, ismacos
 from calibre.customize.ui import find_plugin
-from calibre.gui2 import elided_text, open_url
+from calibre.gui2 import elided_text, open_url, qapplication_or_fail
 from calibre.gui2.keyboard import Manager as KeyboardManager
 from calibre.gui2.main_window import MainWindow
 from calibre.gui2.throbber import ThrobbingButton
@@ -58,7 +57,7 @@ from calibre.gui2.tweak_book.toc import TOCViewer
 from calibre.gui2.tweak_book.undo import CheckpointView
 from calibre.gui2.widgets2 import MessagePopup
 from calibre.utils.icu import ord_string, sort_key
-from calibre.utils.localization import localize_user_manual_link, localize_website_link, pgettext
+from calibre.utils.localization import _, localize_user_manual_link, localize_website_link, pgettext
 from calibre.utils.unicode_names import character_name_from_code
 
 
@@ -286,7 +285,7 @@ class Main(MainWindow):
         self.setWindowTitle(self.APP_NAME)
         self.boss = Boss(self, notify=notify)
         if not ismacos:
-            self.setWindowIcon(QApplication.instance().windowIcon())
+            self.setWindowIcon(qapplication_or_fail().windowIcon())
         self.opts = opts
         self.path_to_ebook = None
         self.container = None
@@ -643,7 +642,7 @@ class Main(MainWindow):
         e.addAction(self.action_subset_fonts)
         e.addAction(self.action_compress_images)
         e.addAction(self.action_smarten_punctuation)
-        ru = e.addMenu(QIcon.ic('edit-clear.png'), _('Remove &unused…'))
+        ru = e.addMenu(QIcon.ic('edit-clear.png'), _('Remove &unused') + '…')
         ru.addAction(self.action_remove_unused_css)
         ru.addAction(self.action_remove_unused_images)
         ts = e.addMenu(QIcon.ic('wizard.png'), _('Transform markup/styles'))

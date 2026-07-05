@@ -12,6 +12,7 @@ import threading
 from contextlib import contextmanager, suppress
 from functools import lru_cache
 from threading import Lock, RLock
+from typing import cast
 
 from qt.core import (
     QApplication,
@@ -88,7 +89,7 @@ from calibre.utils.config_base import tweaks
 from calibre.utils.date import UNDEFINED_DATE
 from calibre.utils.file_type_icons import EXT_MAP
 from calibre.utils.img import set_image_allocation_limit
-from calibre.utils.localization import get_lang, install_qt_translator
+from calibre.utils.localization import _, get_lang, install_qt_translator
 from calibre.utils.resources import get_image_path as I
 from calibre.utils.resources import get_path as P
 from calibre.utils.resources import user_dir
@@ -296,7 +297,7 @@ class IconResourceManager:
 
     def set_theme(self):
         self.icon_cache = {}
-        is_dark = QApplication.instance().is_dark_theme
+        is_dark = qapplication_or_fail().is_dark_theme
         set_icon_theme(is_dark, bool(self.user_dark_theme_name), bool(self.user_light_theme_name), bool(self.user_any_theme_name))
 
 
@@ -703,11 +704,11 @@ def available_heights():
 
 
 def available_height():
-    return QApplication.instance().primaryScreen().availableSize().height()
+    return qapplication_or_fail().primaryScreen().availableSize().height()
 
 
 def available_width():
-    return QApplication.instance().primaryScreen().availableSize().width()
+    return qapplication_or_fail().primaryScreen().availableSize().width()
 
 
 def max_available_height():
@@ -719,7 +720,7 @@ def min_available_height():
 
 
 def get_screen_dpi():
-    s = QApplication.instance().primaryScreen()
+    s = qapplication_or_fail().primaryScreen()
     return s.logicalDotsPerInchX(), s.logicalDotsPerInchY()
 
 
@@ -1077,7 +1078,7 @@ def choose_files_and_remember_all_files(
 def is_dark_theme():
     app = QApplication.instance()
     if app is not None:
-        pal = QApplication.instance().palette()
+        pal = app.palette()
         return pal.is_dark_theme()
     return False
 
@@ -1563,7 +1564,7 @@ def open_url(qurl):
             # QDesktopServices::openUrl()
             ensure_app()
             cmd = ['xdg-open', qurl.toLocalFile() if qurl.isLocalFile() else qurl.toString(QUrl.ComponentFormattingOption.FullyEncoded)]
-            if isfrozen and QApplication.instance().platformName() == 'wayland':
+            if isfrozen and qapplication_or_fail().platformName() == 'wayland':
                 # See https://bugreports.qt.io/browse/QTBUG-119438
                 run_cmd(cmd)
                 ok = True
@@ -1658,6 +1659,13 @@ def ensure_app(headless=True):
     return _store_app
 
 
+def qapplication_or_fail() -> Application:
+    ans = QApplication.instance()
+    if ans is None:
+        raise RuntimeError('No QApplication has been constructed')
+    return cast(Application, ans)
+
+
 def destroy_app():
     global _store_app
     _store_app = None
@@ -1707,9 +1715,9 @@ def elided_text(text, font=None, width=300, pos='middle'):
     rendered, replacing characters from the left, middle or right (as per pos)
     of the string with an ellipsis. Results in a string much closer to the
     limit than Qt's elidedText().'''
-    from qt.core import QApplication, QFontMetrics
+    from qt.core import QFontMetrics
     if font is None:
-        font = QApplication.instance().font()
+        font = qapplication_or_fail().font()
     fm = (font if isinstance(font, QFontMetrics) else QFontMetrics(font))
     delta = 4
     ellipsis = '…'
@@ -1760,7 +1768,7 @@ def set_app_uid(val):
 
 def add_to_recent_docs(path):
     from calibre_extensions import winutil
-    app = QApplication.instance()
+    app = qapplication_or_fail()
     winutil.add_to_recent_docs(str(path), app.windows_app_uid)
 
 
@@ -1789,7 +1797,7 @@ def raise_and_focus(self: QWidget) -> None:
 
 
 def raise_without_focus(self: QWidget) -> None:
-    if QApplication.instance().platformName() == 'wayland':
+    if qapplication_or_fail().platformName() == 'wayland':
         # On fucking Wayland, we can't raise a dialog without also giving it
         # keyboard focus. What a joke.
         self.raise_and_focus()
@@ -1831,7 +1839,7 @@ def resolve_custom_background(name: str ,which='color', for_dark: bool | None = 
                 s['light_texture'] = s['dark_texture'] = legacy
             gprefs[name] = s
     if for_dark is None:
-        for_dark = QApplication.instance().is_dark_theme
+        for_dark = qapplication_or_fail().is_dark_theme
     key = 'dark' if for_dark else 'light'
     if which == 'color':
         return s[key]

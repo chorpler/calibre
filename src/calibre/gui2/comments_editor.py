@@ -15,7 +15,6 @@ from html5_parser import parse
 from lxml import html
 from qt.core import (
     QAction,
-    QApplication,
     QBrush,
     QByteArray,
     QCheckBox,
@@ -71,6 +70,7 @@ from calibre.gui2 import (
     gprefs,
     is_dark_theme,
     local_path_for_resource,
+    qapplication_or_fail,
     question_dialog,
     safe_open_url,
 )
@@ -85,6 +85,7 @@ from calibre.utils.cleantext import clean_xml_chars
 from calibre.utils.config import tweaks
 from calibre.utils.filenames import make_long_path_useable
 from calibre.utils.imghdr import what
+from calibre.utils.localization import _
 
 # Cleanup Qt markup {{{
 
@@ -701,7 +702,7 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
                 'Some images could not be downloaded, click "Show details" to see which ones'), det_msg=m, show=True)
 
     def do_paste_and_match_style(self):
-        text = QApplication.instance().clipboard().text()
+        text = qapplication_or_fail().clipboard().text()
         if text:
             self.setText(text)
 
