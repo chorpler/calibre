@@ -5,7 +5,7 @@
 import json
 import os
 
-from qt.core import QBuffer, QIODevice, QObject, pyqtSignal, sip
+from qt.core import QBuffer, QIODevice, QObject, QUrl, pyqtSignal, sip
 from qt.webengine import QWebEngineProfile, QWebEngineScript, QWebEngineSettings, QWebEngineUrlScheme
 
 from calibre.constants import FAKE_PROTOCOL, SPECIAL_TITLE_FOR_WEBENGINE_COMMS, cache_dir
@@ -79,14 +79,17 @@ def insert_scripts(profile, *scripts):
 
 
 def create_script(
-    name, src, world=QWebEngineScript.ScriptWorldId.ApplicationWorld,
+    name, src: str = '', world=QWebEngineScript.ScriptWorldId.ApplicationWorld,
     injection_point=QWebEngineScript.InjectionPoint.DocumentReady,
-    on_subframes=True
+    on_subframes=True, path: str = '',
 ):
     script = QWebEngineScript()
-    if isinstance(src, bytes):
-        src = src.decode('utf-8')
-    script.setSourceCode(src)
+    if path:
+        script.setSourceUrl(QUrl.fromLocalFile(path))
+    else:
+        if isinstance(src, bytes):
+            src = src.decode('utf-8')
+        script.setSourceCode(src)
     script.setName(name)
     script.setWorldId(world)
     script.setInjectionPoint(injection_point)
@@ -100,7 +103,7 @@ from_js = pyqtSignal
 class to_js(str):
 
     def __call__(self, *a):
-        print(f'WARNING: Calling {self.name}() before the javascript bridge is ready')
+        print(f'WARNING: Calling {self}() before the javascript bridge is ready')
     emit = __call__
 
 
@@ -111,7 +114,9 @@ class to_js_bound(QObject):
         self.name = name
 
     def __call__(self, *args):
-        self.parent().page.runJavaScript(
+        bridge = self.parent()
+        assert isinstance(bridge, Bridge)
+        bridge.page.runJavaScript(
             f'if (window.python_comm) python_comm._from_python({json.dumps(self.name)}, {json.dumps(args)})',
             QWebEngineScript.ScriptWorldId.ApplicationWorld)
     emit = __call__

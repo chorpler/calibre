@@ -18,7 +18,9 @@ class Separator(QWidget):
         return opt
 
     def sizeHint(self):
-        width = self.style().pixelMetric(QStyle.PixelMetric.PM_ToolBarSeparatorExtent, self.style_option(), self)
+        style = self.style()
+        assert style is not None
+        width = style.pixelMetric(QStyle.PixelMetric.PM_ToolBarSeparatorExtent, self.style_option(), self)
         return QSize(width, int(self.devicePixelRatioF() * self.desired_height))
 
     def paintEvent(self, a0):
@@ -64,6 +66,7 @@ class SingleLineToolBar(QToolBar):
     def add_action(self, ac, popup_mode=QToolButton.ToolButtonPopupMode.DelayedPopup):
         self.addAction(ac)
         w = self.widgetForAction(ac)
+        assert isinstance(w, QToolButton)
         w.setPopupMode(popup_mode)
 
     def add_separator(self):
@@ -160,18 +163,7 @@ class FlowToolBar(QWidget):
         super().paintEvent(a0)
 
     def do_layout(self, rect, apply_geometry=False):
-        x, y = rect.x(), rect.y()
-
         line_height = 0
-
-        def layout_spacing(wid, horizontal=True):
-            ans = self.smart_spacing(horizontal)
-            if ans != -1:
-                return ans
-            return wid.style().layoutSpacing(
-                QSizePolicy.ControlType.ToolButton,
-                QSizePolicy.ControlType.ToolButton,
-                Qt.Orientation.Horizontal if horizontal else Qt.Orientation.Vertical)
 
         lines, current_line = [], []
         gmap = {}

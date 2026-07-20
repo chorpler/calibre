@@ -16,6 +16,7 @@ import traceback
 from collections import OrderedDict
 from functools import lru_cache, partial
 from math import modf
+from typing import NoReturn
 
 from calibre.constants import DEBUG
 from calibre.ebooks.metadata.book.base import field_metadata
@@ -1001,24 +1002,24 @@ class FormatterFuncsCaller:
                     e = e.__class__(_('Error in function {0} :: {1}').format(
                             name,
                             re.sub(r'\w+\.evaluate\(\)\s*', '', str(e), 1)))  # remove UserFunction.evaluate() | Builtin*.evaluate()
-                    e.is_internal = True
+                    setattr(e, 'is_internal', True)
                     raise e
                 return rslt
 
             return call
 
         e = AttributeError(_('No function named {!r} exists').format(name))
-        e.is_internal = True
+        setattr(e, 'is_internal', True)
         raise e
 
     def __dir__(self):
-        return list(set(object.__dir__(self) +
+        return list(set(list(object.__dir__(self)) +
                         list(self.__formatter__.funcs.keys()) +
                         [f+'_' for f in self.__formatter__.funcs.keys()]))
 
 
 class _Interpreter:
-    def error(self, message, line_number):
+    def error(self, message, line_number) -> NoReturn:
         m = _('Interpreter: {0} - line number {1}').format(message, line_number)
         raise ValueError(m)
 
@@ -1699,8 +1700,8 @@ class _Interpreter:
 
 
 @lru_cache(maxsize=2)
-def args_scanner() -> re.Scanner:
-    return re.Scanner([
+def args_scanner() -> re.Scanner:  # type: ignore
+    return re.Scanner([  # type: ignore
         (r',', lambda x,t: ''),
         (r'.*?(?:(?<!\\),)', lambda x,t: t[:-1]),
         (r'.*?\)', lambda x,t: t[:-1]),
@@ -1708,8 +1709,8 @@ def args_scanner() -> re.Scanner:
 
 
 @lru_cache(maxsize=2)
-def cached_lex_scanner() -> re.Scanner:
-    return re.Scanner([
+def cached_lex_scanner() -> re.Scanner:  # type: ignore
+    return re.Scanner([  # type: ignore
         (r'(?:==#|!=#|<=#|<#|>=#|>#)', lambda x,t: (_Parser.LEX_NUMERIC_INFIX, t)),
         (r'(?:==|!=|<=|<|>=|>)',       lambda x,t: (_Parser.LEX_STRING_INFIX, t)),
         (r'(?:if|then|else|elif|fi)\b',lambda x,t: (_Parser.LEX_KEYWORD, t)),
@@ -1851,6 +1852,7 @@ class TemplateFormatter(string.Formatter):
         try:
             db = get_database(self.book, None)
             db = db if db is not None else self.database
+            assert self.python_context_object is not None
             self.python_context_object.set_values(
                          db=db,
                          globals=self.global_vars,

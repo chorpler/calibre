@@ -483,7 +483,7 @@ class ODF2XHTML(handler.ContentHandler):
         (TEXTNS, 'user-index-source'):(self.s_text_x_source, self.e_text_x_source),
         }
         if embedable:
-            self.make_embedable()
+            self.set_embedable()
         self._resetobject()
 
     def set_plain(self):
@@ -512,7 +512,7 @@ class ODF2XHTML(handler.ContentHandler):
         # Footnotes and endnotes
         self.notedict = {}
         self.currentnote = 0
-        self.notebody = ''
+        self.notebody: list[str] = []
 
     def _resetobject(self):
         self.lines = []
@@ -584,7 +584,7 @@ class ODF2XHTML(handler.ContentHandler):
 # --------------------------------------------------
     def characters(self, content):
         if self.processelem and self.processcont:
-            self.content.append(content)
+            self.data.append(content)
 
     def startElementNS(self, name, qname, attrs):
         self.pstack.append((self.processelem, self.processcont))
@@ -876,6 +876,7 @@ dl.notes dd:last-of-type { page-break-after: avoid }
     def generate_stylesheet(self):
         for name in self.stylestack:
             styles = self.styledict.get(name)
+            assert styles is not None
             # Preload with the family's default style
             if '__style-family' in styles and styles['__style-family'] in self.styledict:
                 familystyle = self.styledict[styles['__style-family']].copy()
@@ -928,7 +929,7 @@ dl.notes dd:last-of-type { page-break-after: avoid }
         if self.currentnote == 0:
             return
         # Changed by Kovid to improve endnote functionality
-        from builtins import _
+        from calibre.utils.localization import _
         self.opentag('h1', {'class':'notes-header'})
         self.writeout(_('Notes'))
         self.closetag('h1')
@@ -1454,7 +1455,7 @@ dl.notes dd:last-of-type { page-break-after: avoid }
     def e_text_note_body(self, tag, attrs):
         self._wfunc = self._orgwfunc
         self.notedict[self.currentnote]['body'] = ''.join(self.notebody)
-        self.notebody = ''
+        self.notebody = []
         del self._orgwfunc
 
     def e_text_note_citation(self, tag, attrs):

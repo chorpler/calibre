@@ -47,6 +47,13 @@ def index(ctx, rd):
     return open(P('content-server/index-generated.html'), 'rb')
 
 
+@endpoint('/index.js.map', auth_required=False)
+def index_js_map(ctx, rd):
+    rd.outheaders['Content-Type'] = 'application/json'
+    # allow serving the data via sendfile() for performance
+    return open(P('content-server/index.js.map'), 'rb')
+
+
 @endpoint('/robots.txt', auth_required=False)
 def robots(ctx, rd):
     return b'User-agent: *\nDisallow: /'
@@ -137,7 +144,7 @@ def get_basic_query_data(ctx, rd):
     return library_id, db, sorts, orders, rd.query.get('vl') or ''
 
 
-def get_translations_data():
+def get_translations_data() -> bytes | None:
     with zipfile.ZipFile(
         P('content-server/locales.zip', allow_user_override=False), 'r'
     ) as zf:
@@ -151,19 +158,26 @@ def get_translations_data():
             return zf.open(lang, 'r').read()
 
 
+_translations_cache: dict | bool | None = None
+
+
 def get_translations():
-    if not hasattr(get_translations, 'cached'):
-        get_translations.cached = False
+    global _translations_cache
+    if _translations_cache is None:
+        _translations_cache = False
         data = get_translations_data()
         if data:
-            get_translations.cached = json_loads(data)
-    return get_translations.cached
+            _translations_cache = json_loads(data)
+    return _translations_cache
+
+
+_custom_list_template_cache: dict | None = None
 
 
 def custom_list_template():
-    ans = getattr(custom_list_template, 'ans', None)
-    if ans is None:
-        ans = {
+    global _custom_list_template_cache
+    if _custom_list_template_cache is None:
+        _custom_list_template_cache = {
             'thumbnail': True,
             'thumbnail_height': 140,
             'height': 'auto',
@@ -176,8 +190,7 @@ def custom_list_template():
                 '',
             ]
         }
-        custom_list_template.ans = ans
-    return ans
+    return _custom_list_template_cache
 
 
 def book_exists(x, ctx, rd):
@@ -693,11 +706,14 @@ def browse_field(ctx, rd, field):
     return {'field': field, 'items': items}
 
 
+_all_lang_names_cache: tuple | None = None
+
+
 def all_lang_names():
-    ans = getattr(all_lang_names, 'ans', None)
-    if ans is None:
-        ans = all_lang_names.ans = tuple(sorted(lang_map_for_ui().values(), key=numeric_sort_key))
-    return ans
+    global _all_lang_names_cache
+    if _all_lang_names_cache is None:
+        _all_lang_names_cache = tuple(sorted(lang_map_for_ui().values(), key=numeric_sort_key))
+    return _all_lang_names_cache
 
 
 @endpoint('/interface-data/field-names/{field}', postprocess=json)

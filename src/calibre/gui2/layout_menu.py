@@ -2,7 +2,10 @@
 # License: GPLv3 Copyright: 2017, Kovid Goyal <kovid at kovidgoyal.net>
 
 
+from typing import cast
+
 from qt.core import (
+    QBoxLayout,
     QEvent,
     QFontMetrics,
     QHBoxLayout,
@@ -75,6 +78,7 @@ class LayoutItem(QWidget):
             tool.state = QStyle.StateFlag.State_Raised | QStyle.StateFlag.State_Active | QStyle.StateFlag.State_MouseOver
             painter.drawPrimitive(QStyle.PrimitiveElement.PE_PanelButtonTool, tool)
         br = painter.drawText(0, 0, self.width(), ls, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextSingleLine, self.text)
+        assert br is not None
         top = br.bottom()
         bottom = self.height() - ls
         text = _('Hide') if shown else _('Show')
@@ -100,7 +104,9 @@ class LayoutMenuInner(QWidget):
 
     @property
     def gui(self):
-        return self.parent().parent()
+        _parent = self.parent()
+        assert _parent is not None
+        return _parent.parent()
 
     def delayed_init(self):
         if not self.initialized:
@@ -112,13 +118,14 @@ class LayoutMenuInner(QWidget):
                     for i in 'search tags cover_flow grid book'.split()]
                 for b in buttons:
                     b.setVisible(False), b.setCheckable(True), b.setChecked(b.text() in 'tags grid')
-                    b.label = b.text().capitalize()
+                    setattr(b, 'label', b.text().capitalize())
             else:
                 buttons = gui.layout_buttons
             l = self.layout()
+            assert l is not None
             for b in buttons:
                 self.items.append(LayoutItem(b, self))
-                l.addWidget(self.items[-1], alignment=Qt.AlignmentFlag.AlignBottom)
+                cast(QBoxLayout, l).addWidget(self.items[-1], alignment=Qt.AlignmentFlag.AlignBottom)
         self.current_item = None
         for x in self.items:
             x.update_tips()
@@ -153,7 +160,10 @@ class LayoutMenuInner(QWidget):
         item = self.item_for_ev(a0)
         if item is not None and item is self.current_item:
             a0.accept()
-            self.parent().hide()
+            menu_parent = self.parent()
+            assert menu_parent is not None
+            assert isinstance(menu_parent, QWidget)
+            menu_parent.hide()
             item.button.click()
 
     def handle_key_press(self, ev):
@@ -165,7 +175,10 @@ class LayoutMenuInner(QWidget):
             else:
                 sc = QKeySequence.fromString(sc)
             if sc.matches(q) == QKeySequence.SequenceMatch.ExactMatch:
-                self.parent().hide()
+                menu_parent = self.parent()
+                assert menu_parent is not None
+                assert isinstance(menu_parent, QWidget)
+                menu_parent.hide()
                 item.button.click()
                 ev.accept()
                 break
@@ -188,12 +201,14 @@ class LayoutMenu(QWidget):
     def show(self):
         self.inner.delayed_init()
         parent = self.parent()
+        assert parent is not None
+        assert isinstance(parent, QWidget)
         self.move(0, 0)
         self.resize(parent.rect().size())
         r = parent.rect()
         y = r.height()
         if hasattr(parent, 'layout_button'):
-            lb = parent.layout_button
+            lb = cast(QWidget, parent.layout_button)
             y = lb.mapTo(parent, lb.rect().topLeft()).y()
         self.inner.move(r.width() - self.inner.size().width(), y - self.inner.size().height())
         super().show()

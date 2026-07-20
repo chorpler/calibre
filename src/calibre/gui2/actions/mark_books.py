@@ -100,6 +100,7 @@ class MarkBooksAction(InterfaceActionWithLibraryDrop):
         self.search_icon = QIcon.ic('search.png')
         self.qaction.triggered.connect(self.toggle_selected)
         self.menu = m = self.qaction.menu()
+        assert m is not None
         m.aboutToShow.connect(self.about_to_show_menu)
         ma = partial(self.create_menu_action, m)
         self.show_marked_action = a = ma('mark_selected', _('Mark all selected books'), icon='marked.png')
@@ -160,6 +161,7 @@ class MarkBooksAction(InterfaceActionWithLibraryDrop):
             self.show_marked_with_text.setEnabled(True)
             for t in labs:
                 ac = self.show_marked_with_text.addAction(self.search_icon, f'{t} ({counts[t]})')
+                assert ac is not None
                 ac.triggered.connect(partial(self.show_marked_text, txt=t))
             if len(labs) < len(labels):
                 self.show_marked_with_text.addAction(
@@ -171,6 +173,7 @@ class MarkBooksAction(InterfaceActionWithLibraryDrop):
         enabled = loc == 'library'
         self.qaction.setEnabled(enabled)
         self.menuless_qaction.setEnabled(enabled)
+        assert self.menu is not None
         for action in self.menu.actions():
             action.setEnabled(enabled)
 
@@ -235,7 +238,7 @@ class MarkBooksAction(InterfaceActionWithLibraryDrop):
         if not book_ids:
             return
         dialog = MarkWithTextDialog(self.gui)
-        if dialog.exec_() != QDialog.DialogCode.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         txt = dialog.text()
         txt = txt or 'true'

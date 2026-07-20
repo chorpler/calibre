@@ -59,10 +59,13 @@ class ResultsView(QTreeView):
         if not index.isValid():
             return
 
-        result = self.model().get_result(index)
+        _m = self.model()
+        assert isinstance(_m, Matches)
+        result = _m.get_result(index)
 
         menu = QMenu(self)
         da = menu.addAction(_('Download...'), partial(self.download_requested.emit, result))
+        assert da is not None
         if not result.downloads:
             da.setEnabled(False)
         menu.addSeparator()

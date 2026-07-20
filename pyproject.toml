@@ -88,9 +88,9 @@ requires = [
 ]
 [dependency-groups]
 dev = [
-    "ruff >= 0.15.0",
+    "ruff >= 0.15.21",
     "types-lxml >= 2026.2.16",
-    "ty >= 0.0.56",
+    "ty >= 0.0.59",
 ]
 
 [tool.ruff]
@@ -290,11 +290,21 @@ exclude = [
 [tool.ty.environment]
 root = ['./src']
 extra-paths = ['./stubs']
+python-platform = "all"
 
 [tool.ty.src]
 exclude = [
 	'**/*_ui.py', '**/*_test.py', '**/test_*.py',
-	'setup/*.py', 'setup.py',
+	'setup/*.py', 'setup.py', 'manual/**/*.py', 'bypy/**/*.py',
 	'**/tests/**',
-	'src/calibre/library/database2.py'
+    '.github/workflows/*.py',
+	'src/calibre/library/add_to_library.py',
+	'src/calibre/library/database.py',
+	'src/calibre/library/database2.py',
+	'src/calibre/library/sqlite.py',
+	'src/calibre/library/prefs.py',
+	'src/calibre/library/restore.py',
+	'src/calibre/library/custom_columns.py',
+	'src/calibre/library/schema_upgrades.py',
+    'src/calibre/gui2/pyqt6_compat.py',
 ]

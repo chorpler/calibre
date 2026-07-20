@@ -51,7 +51,7 @@ class LoadParser(handler.ContentHandler):
     def characters(self, content):
         if self.parse is False:
             return
-        self.content.append(content)
+        self.data.append(content)
 
     def startElementNS(self, name, qname, attrs):
         if name in self.triggers:
@@ -65,6 +65,7 @@ class LoadParser(handler.ContentHandler):
         # Add any accumulated text content
         content = ''.join(self.data)
         if len(content.strip()) > 0:
+            assert self.parent is not None
             self.parent.addText(content, check_grammar=False)
             self.data = []
         # Create the element
@@ -94,6 +95,7 @@ class LoadParser(handler.ContentHandler):
         elif self.doc._parsing == 'styles.xml' and name == (OFFICENS, 'font-face-decls'):
             e = self.doc.fontfacedecls
         elif hasattr(self,'parent'):
+            assert self.parent is not None
             self.parent.addElement(e, check_grammar=False)
         self.parent = e
 
@@ -112,8 +114,10 @@ class LoadParser(handler.ContentHandler):
         if do_strip:
             q = q.strip()
         if q:
+            assert self.curr is not None
             self.curr.addText(data, check_grammar=False)
         self.data = []
+        assert self.curr is not None
         self.curr = self.curr.parentNode
         self.parent = self.curr
         if name in self.triggers:

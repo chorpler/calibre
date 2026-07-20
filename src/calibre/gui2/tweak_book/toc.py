@@ -65,6 +65,7 @@ class TOCEditor(QDialog):
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         self.undo_button = b = bb.addButton(_('&Undo'), QDialogButtonBox.ButtonRole.ActionRole)
+        assert b is not None
         b.setToolTip(_('Undo the last action, if any'))
         b.setIcon(QIcon.ic('edit-undo.png'))
         b.clicked.connect(self.toc_view.undo)
@@ -143,8 +144,9 @@ FRAG_ROLE = DEST_ROLE + 1
 
 class Delegate(QStyledItemDelegate):
 
-    def sizeHint(self, *args):
-        ans = QStyledItemDelegate.sizeHint(self, *args)
+    def sizeHint(self, option=None, index=None):
+        assert option is not None and index is not None
+        ans = QStyledItemDelegate.sizeHint(self, option, index)
         return ans + QSize(0, 10)
 
 
@@ -212,7 +214,7 @@ class TOCViewer(QWidget):
 
     def iter_items(self, parent=None):
         if parent is None:
-            parent = self.invisibleRootItem()
+            parent = self.view.invisibleRootItem()
         for i in range(parent.childCount()):
             child = parent.child(i)
             yield child

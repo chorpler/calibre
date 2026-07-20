@@ -33,13 +33,15 @@ from calibre.utils.resources import get_image_path
 
 class Browser(QTextBrowser):
 
-    def __init__(self, parent: QWidget = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setOpenLinks(False)
         self.setMinimumHeight(150)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setContentsMargins(0, 0, 0, 0)
-        self.document().setDocumentMargin(0)
+        doc = self.document()
+        assert doc is not None
+        doc.setDocumentMargin(0)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         if tweaks['change_ai_chat_font_size_by']:
             font = QFont(self.font())
@@ -49,12 +51,16 @@ class Browser(QTextBrowser):
     def sizeHint(self) -> QSize:
         return QSize(600, 500)
 
-    def setHtml(self, text: str) -> None:
+    def setHtml(self, text) -> None:
         super().setHtml(text)
-        self.document().setDocumentMargin(0)
+        doc = self.document()
+        assert doc is not None
+        doc.setDocumentMargin(0)
 
     def scroll_to_bottom(self) -> None:
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+        vsb = self.verticalScrollBar()
+        assert vsb is not None
+        vsb.setValue(vsb.maximum())
 
 
 class Button(NamedTuple):
@@ -87,7 +93,7 @@ class InputEdit(QTextEdit):
 
     returnPressed = pyqtSignal()
 
-    def __init__(self, parent: QWidget = None, placeholder_text: str = ''):
+    def __init__(self, parent: QWidget | None = None, placeholder_text: str = ''):
         super().__init__(parent)
         self.setPlaceholderText(placeholder_text)
         self.height_for_frame = 2 * self.frameWidth() + self.contentsMargins().top() + self.contentsMargins().bottom()
@@ -102,7 +108,9 @@ class InputEdit(QTextEdit):
         return ceil(line_height + self.height_for_frame)
 
     def adjust_height(self) -> None:
-        doc_height = ceil(self.document().size().height())
+        doc = self.document()
+        assert doc is not None
+        doc_height = ceil(doc.size().height())
         self.setFixedHeight(max(self.min_height, min(doc_height + self.height_for_frame, self.maximum_height)))
         self.ensureCursorVisible()
 
@@ -133,7 +141,7 @@ class Input(QWidget):
 
     send_requested = pyqtSignal()
 
-    def __init__(self, parent: QWidget = None, placeholder_text: str = ''):
+    def __init__(self, parent: QWidget | None = None, placeholder_text: str = ''):
         super().__init__(parent)
         l = QHBoxLayout(self)
         l.setContentsMargins(0, 0, 0, 0)
@@ -146,7 +154,7 @@ class Input(QWidget):
         b.clicked.connect(self.send_requested)
         l.addWidget(b, alignment=Qt.AlignmentFlag.AlignCenter)
 
-    def setFocus(self, reason) -> None:
+    def setFocus(self, reason=Qt.FocusReason.OtherFocusReason) -> None:
         self.text_input.setFocus(reason)
 
     @property
@@ -166,7 +174,7 @@ class ChatWidget(QWidget):
     link_clicked = pyqtSignal(QUrl)
     input_from_user = pyqtSignal(str)
 
-    def __init__(self, parent: QWidget = None, placeholder_text: str = '', disclaimer_text: str | None = None):
+    def __init__(self, parent: QWidget | None = None, placeholder_text: str = '', disclaimer_text: str | None = None):
         super().__init__(parent)
         if disclaimer_text is None:
             disclaimer_text = _(
@@ -198,7 +206,7 @@ class ChatWidget(QWidget):
         self.line_spacing = self.browser.fontMetrics().lineSpacing()
         self.disclaimer_label.setVisible(False)
 
-    def setFocus(self, reason) -> None:
+    def setFocus(self, reason=...) -> None:
         self.input.setFocus(reason)
 
     def wrap_content_in_padding_table(self, html: str, background_color: str = '') -> str:

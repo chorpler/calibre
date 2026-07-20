@@ -17,7 +17,9 @@ class LineNumberArea(LineNumbers):
 
     def mouseDoubleClickEvent(self, a0):
         super().mousePressEvent(a0)
-        self.parent().line_area_doubleclick_event(a0)
+        p = self.parent()
+        assert isinstance(p, CodeEditor)
+        p.line_area_doubleclick_event(a0)
 
 
 class CodeEditor(QPlainTextEdit):
@@ -72,7 +74,9 @@ class CodeEditor(QPlainTextEdit):
             self.line_number_area.scroll(0, dy)
         else:
             self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
-        if rect.contains(self.viewport().rect()):
+        vp = self.viewport()
+        assert vp is not None
+        if rect.contains(vp.rect()):
             self.update_line_number_area_width()
 
     def resizeEvent(self, e):
@@ -140,7 +144,7 @@ class CodeEditor(QPlainTextEdit):
             e.accept()
             return
         key = e.key()
-        if key in (Qt.Key_Tab, Qt.Key_Backtab):
+        if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
             '''
             Handle indenting usingTab and Shift Tab. This is remarkably
             difficult because of the way Qt represents the edit buffer.
@@ -174,7 +178,9 @@ class CodeEditor(QPlainTextEdit):
 
             def select_block(block_number, curs):
                 # Note the side effect: 'curs' is changed to select the line
-                blk = self.document().findBlockByNumber(block_number)
+                doc = self.document()
+                assert doc is not None
+                blk = doc.findBlockByNumber(block_number)
                 txt = blk.text()
                 pos = blk.position()
                 curs.setPosition(pos)
@@ -183,7 +189,7 @@ class CodeEditor(QPlainTextEdit):
 
             # Check if there is a selection. If not then only Shift-Tab is valid
             if start_position == end_position:
-                if key == Qt.Key_Backtab:
+                if key == Qt.Key.Key_Backtab:
                     txt = select_block(start_block, cursor)
                     if txt.startswith('\t'):
                         # This works because of the side effect in select_block()
@@ -197,7 +203,7 @@ class CodeEditor(QPlainTextEdit):
             # There is a selection so both Tab and Shift-Tab do indenting operations
             for bn in range(start_block, end_block+1):
                 txt = select_block(bn, cursor)
-                if key == Qt.Key_Backtab:
+                if key == Qt.Key.Key_Backtab:
                     if txt.startswith('\t'):
                         cursor.insertText(txt[1:])
                         if bn == start_block:

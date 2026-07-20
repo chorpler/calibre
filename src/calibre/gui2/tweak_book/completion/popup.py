@@ -6,8 +6,12 @@ __copyright__ = '2014, Kovid Goyal <kovid at kovidgoyal.net>'
 
 import textwrap
 from math import ceil
+from typing import TYPE_CHECKING, cast
 
 from qt.core import QEvent, QPainter, QPalette, QSize, QStaticText, Qt, QTextCursor, QTextOption, QTimer, QWidget
+
+if TYPE_CHECKING:
+    from calibre.gui2.tweak_book.editor.text import TextEdit
 
 from calibre import prepare_string_for_xml, prints
 from calibre.gui2 import error_dialog
@@ -30,7 +34,8 @@ class ChoosePopupWidget(QWidget):
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self.current_results = self.current_size_hint = None
+        self.current_results: tuple = ()
+        self.current_size_hint = None
 
         self.max_text_length = 0
         self.current_index = -1
@@ -74,7 +79,9 @@ class ChoosePopupWidget(QWidget):
             st = self.rendered_text_cache[otext] = QStaticText(text)
             st.setTextOption(self.text_option)
             st.setTextFormat(Qt.TextFormat.RichText)
-            st.prepare(font=self.parent().font())
+            parent_widget = self.parent()
+            assert isinstance(parent_widget, QWidget)
+            st.prepare(font=parent_widget.font())
         return st
 
     def sizeHint(self):
@@ -85,6 +92,7 @@ class ChoosePopupWidget(QWidget):
                 height += ceil(sz.height()) + self.BOTTOM_MARGIN
                 max_width = max(max_width, ceil(sz.width()))
             self.current_size_hint = QSize(max_width + 2 * self.SIDE_MARGIN, height + self.BOTTOM_MARGIN + self.TOP_MARGIN)
+        assert self.current_size_hint is not None
         return self.current_size_hint
 
     def iter_visible_items(self):
@@ -111,7 +119,9 @@ class ChoosePopupWidget(QWidget):
         crect = self.rect().adjusted(1, 1, -1, -1)
         painter.fillRect(crect, pal.color(QPalette.ColorRole.Base))
         painter.setClipRect(crect)
-        painter.setFont(self.parent().font())
+        parent_widget = self.parent()
+        assert isinstance(parent_widget, QWidget)
+        painter.setFont(parent_widget.font())
         width = self.rect().width()
         for i, st, y, height in self.iter_visible_items():
             painter.save()
@@ -128,11 +138,14 @@ class ChoosePopupWidget(QWidget):
             QTimer.singleShot(0, self.layout)
 
     def layout(self, cursor_rect=None):
-        p = self.parent()
+        p_raw = self.parent()
+        assert p_raw is not None
+        p = cast('TextEdit', p_raw)
         if cursor_rect is None:
             cursor_rect = p.cursorRect().adjusted(0, 0, 0, 2)
         gutter_width = p.gutter_width
         vp = p.viewport()
+        assert vp is not None
         above = cursor_rect.top() > vp.height() - cursor_rect.bottom()
         max_height = min(self.max_height, (cursor_rect.top() if above else vp.height() - cursor_rect.bottom()) - 15)
         max_width = vp.width() - 25 - gutter_width
@@ -252,7 +265,7 @@ class CompletionPopup(ChoosePopupWidget):
     def activate_current_result(self):
         if self.current_completion is not None:
             c = self.current_completion
-            text = self.current_query if self.current_index == -1 else self.current_results[self.current_index][0]
+            text = (self.current_query or '') if self.current_index == -1 else self.current_results[self.current_index][0]
             c.insertText(text)
             chars = string_length(text)
             c.setPosition(c.position() - chars)

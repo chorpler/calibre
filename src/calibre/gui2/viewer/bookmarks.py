@@ -86,7 +86,9 @@ class BookmarksList(QListWidget):
         items = [self.item(r) for r in range(self.count())]
         row = self.currentRow()
         current_item = items[row]
-        items = [i for i in items if not i.isHidden()]
+        if current_item is None:
+            return
+        items = [i for i in items if i is not None and not i.isHidden()]
         count = len(items)
         if not count:
             return
@@ -213,6 +215,7 @@ class BookmarkManager(QWidget):
                 i.setHidden(True)
         for i in range(self.bookmarks_list.count()):
             item = self.bookmarks_list.item(i)
+            assert item is not None
             if not item.isHidden():
                 self.bookmarks_list.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
                 break
@@ -249,6 +252,7 @@ class BookmarkManager(QWidget):
         remove = []
         for i in range(self.bookmarks_list.count()):
             item = self.bookmarks_list.item(i)
+            assert item is not None
             bm = item.data(Qt.ItemDataRole.UserRole)
             if bm.get('removed') and bm['title'] == base:
                 remove.append(i)

@@ -5,6 +5,7 @@ __license__   = 'GPL v3'
 __copyright__ = '2010, Kovid Goyal <kovid@kovidgoyal.net>'
 __docformat__ = 'restructuredtext en'
 
+import io
 import os
 from contextlib import closing
 from posixpath import basename
@@ -92,7 +93,20 @@ class SevenZip:
         self.zf.close()
 
     def read(self, fname):
-        return self.zf.read((fname,))[fname].read()
+        from py7zr import WriterFactory
+        class MemoryFactory(WriterFactory):
+            def __init__(self):
+                self.buffers = {}
+
+            def create(self, filename):
+                # Create an in-memory BytesIO stream for the file
+                self.buffers[filename] = io.BytesIO()
+                return self.buffers[filename]
+        factory = MemoryFactory()
+        self.zf.extract(targets=[fname], factory=factory)
+        target_buffer: io.BytesIO = factory.buffers[fname]
+        target_buffer.seek(0)
+        return target_buffer.getvalue()
 
 
 def fname_ok(fname):
@@ -242,7 +256,7 @@ def get_comic_images(path, tdir, first=1, last=0):  # first and last use 1 based
         fmt = archive_type(f)
         if fmt not in ('zip', 'rar'):
             return 0
-    items = {}
+    items: dict = {}
     if fmt == 'rar':
         from calibre.utils.unrar import headers
         for h in headers(path):
@@ -278,6 +292,7 @@ def get_comic_images(path, tdir, first=1, last=0):  # first and last use 1 based
                     return True
                 return False
             if isinstance(x, bytes):
+                assert current is not None
                 current.write(x)
         extract_members(path, callback)
         if current is not None:

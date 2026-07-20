@@ -73,12 +73,15 @@ class DownloadProgress(QWidget):
             self.setVisible(False)
 
 
-def create_profile():
-    ans = getattr(create_profile, 'ans', None)
-    if ans is None:
-        ans = create_profile.ans = setup_profile(QWebEngineProfile('web_store', QApplication.instance()))
-        ans.setHttpUserAgent(random_user_agent(allow_ie=False))
-    return ans
+_profile: QWebEngineProfile | None = None
+
+
+def create_profile() -> QWebEngineProfile:
+    global _profile
+    if _profile is None:
+        _profile = setup_profile(QWebEngineProfile('web_store', QApplication.instance()))
+        _profile.setHttpUserAgent(random_user_agent(allow_ie=False))
+    return _profile
 
 
 class Central(QWidget):
@@ -119,7 +122,9 @@ class Central(QWidget):
 
     @property
     def profile(self):
-        return self.view.page().profile()
+        page = self.view.page()
+        assert page is not None
+        return page.profile()
 
     def load_started(self):
         self.progress_bar.setValue(0)

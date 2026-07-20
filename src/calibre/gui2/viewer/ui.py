@@ -34,6 +34,7 @@ from qt.core import (
     sip,
 )
 
+import calibre.gui2.viewer.web_view as _web_view_module
 from calibre import prints
 from calibre.constants import ismacos, iswindows
 from calibre.customize.ui import available_input_formats
@@ -51,7 +52,7 @@ from calibre.gui2.viewer.highlights import HighlightsPanel, style_definition_for
 from calibre.gui2.viewer.integration import get_book_library_details, load_annotations_map_from_library
 from calibre.gui2.viewer.overlay import LoadingOverlay
 from calibre.gui2.viewer.search import SearchPanel
-from calibre.gui2.viewer.toc import TOC, TOCSearch, TOCView
+from calibre.gui2.viewer.toc import TOC, TOCItem, TOCSearch, TOCView
 from calibre.gui2.viewer.toolbars import ActionsToolBar
 from calibre.gui2.viewer.web_view import WebView, get_path_for_name, set_book_path
 from calibre.live import async_stop_worker
@@ -97,6 +98,13 @@ class EbookViewer(MainWindow):
     book_preparation_started = pyqtSignal()
     book_prepared = pyqtSignal(object, object)
     MAIN_WINDOW_STATE_VERSION = 1
+
+    toc_dock: QDockWidget
+    search_dock: QDockWidget
+    inspector_dock: QDockWidget
+    bookmarks_dock: QDockWidget
+    highlights_dock: QDockWidget
+    lookup_dock: QDockWidget
 
     def __init__(self, open_at=None, continue_reading=None, force_reload=False, calibre_book_data=None):
         MainWindow.__init__(self, None)
@@ -145,12 +153,12 @@ class EbookViewer(MainWindow):
                 dock_def.title, dock_def.name, dock_def.initial_area, dock_def.allowed_areas))
 
         self.toc_container = w = QWidget(self)
-        w.l = QVBoxLayout(w)
+        toc_layout = QVBoxLayout(w)
         self.toc = TOCView(w)
         self.toc.clicked[QModelIndex].connect(self.toc_clicked)
         self.toc.searched.connect(self.toc_searched)
         self.toc_search = TOCSearch(self.toc, parent=w)
-        w.l.addWidget(self.toc), w.l.addWidget(self.toc_search), w.l.setContentsMargins(0, 0, 0, 0)
+        toc_layout.addWidget(self.toc), toc_layout.addWidget(self.toc_search), toc_layout.setContentsMargins(0, 0, 0, 0)
         self.toc_dock.setWidget(w)
 
         self.search_widget = w = SearchPanel(self)
@@ -268,7 +276,7 @@ class EbookViewer(MainWindow):
         m.addSeparator()
         a(_('Hide this scrollbar'), 'toggle_scrollbar')
 
-        q = m.exec(QCursor.pos())
+        q = m.exec(QCursor.pos())  # type: ignore
         if not q:
             return
         q = amap[q.text()]
@@ -328,7 +336,8 @@ class EbookViewer(MainWindow):
     # Docks (ToC, Bookmarks, Lookup, etc.) {{{
 
     def toggle_inspector(self):
-        visible = self.inspector_dock.toggleViewAction().isChecked()
+        action = self.inspector_dock.toggleViewAction()
+        visible = action.isChecked() if action is not None else False
         self.inspector_dock.setVisible(not visible)
 
     def toggle_toc(self):
@@ -401,6 +410,8 @@ class EbookViewer(MainWindow):
         if self.check_for_read_aloud(_('Table of Contents locations')):
             return
         item = self.toc_model.itemFromIndex(index)
+        assert item is not None
+        assert isinstance(item, TOCItem)
         self.web_view.goto_toc_node(item.node_id)
         self.force_focus_on_web_view()
 
@@ -410,6 +421,8 @@ class EbookViewer(MainWindow):
 
     def toc_searched(self, index):
         item = self.toc_model.itemFromIndex(index)
+        assert item is not None
+        assert isinstance(item, TOCItem)
         self.web_view.goto_toc_node(item.node_id)
 
     def bookmarks_edited(self, bookmarks):
@@ -471,7 +484,9 @@ class EbookViewer(MainWindow):
         md = QMimeData()
         md.setImageData(img)
         md.setUrls([url])
-        qapplication_or_fail().clipboard().setMimeData(md)
+        cb = qapplication_or_fail().clipboard()
+        assert cb is not None
+        cb.setMimeData(md)
 
     def dock_visibility_changed(self):
         vmap = {dock.objectName().partition('-')[0]: dock.toggleViewAction().isChecked() for dock in self.dock_widgets}
@@ -501,11 +516,11 @@ class EbookViewer(MainWindow):
         error_dialog(self, title, msg, det_msg=details or None, show=True)
 
     def print_book(self):
-        if not hasattr(set_book_path, 'pathtoebook'):
+        if _web_view_module._book_pathtoebook is None:
             error_dialog(self, _('Cannot print book'), _('No book is currently open'), show=True)
             return
         from .printing import print_book
-        print_book(set_book_path.pathtoebook, book_title=self.current_book_data['metadata']['title'], parent=self)
+        print_book(_web_view_module._book_pathtoebook, book_title=self.current_book_data['metadata']['title'], parent=self)
 
     @property
     def dock_widgets(self):
@@ -680,8 +695,8 @@ class EbookViewer(MainWindow):
         self.toc_model = TOC(toc)
         self.toc.setModel(self.toc_model)
         self.bookmarks_widget.set_bookmarks(self.current_book_data['annotations_map']['bookmark'])
-        self.current_book_data['metadata'] = set_book_path.parsed_metadata
-        self.current_book_data['manifest'] = set_book_path.parsed_manifest
+        self.current_book_data['metadata'] = _web_view_module._book_parsed_metadata
+        self.current_book_data['manifest'] = _web_view_module._book_parsed_manifest
 
     def load_book_annotations(self, calibre_book_data=None):
         amap = self.current_book_data['annotations_map']
@@ -782,9 +797,8 @@ class EbookViewer(MainWindow):
 
         from calibre.ebooks.oeb.polish.main import SUPPORTED
         from calibre.utils.ipc.launch import exe_path, macos_edit_book_bundle_path
-        try:
-            path = set_book_path.pathtoebook
-        except AttributeError:
+        path = _web_view_module._book_pathtoebook
+        if path is None:
             return error_dialog(self, _('Cannot edit book'), _('No book is currently open'), show=True)
         fmt = path.rpartition('.')[-1].upper().replace('ORIGINAL_', '')
         if fmt not in SUPPORTED:

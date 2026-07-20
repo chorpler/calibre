@@ -367,7 +367,7 @@ class HandleInterrupt:  # {{{
         if not iswindows:
             return  # Interrupts work fine on POSIX
         self.action = action
-        from ctypes import WINFUNCTYPE, windll  # type: ignore
+        from ctypes import WINFUNCTYPE, windll
         from ctypes.wintypes import BOOL, DWORD
 
         kernel32 = windll.LoadLibrary('kernel32')
@@ -392,13 +392,13 @@ class HandleInterrupt:  # {{{
         if iswindows:
             if self.SetConsoleCtrlHandler(self.handle, 1) == 0:
                 import ctypes
-                raise ctypes.WinError()  # type: ignore
+                raise ctypes.WinError()
 
     def __exit__(self, *args):
         if iswindows:
             if self.SetConsoleCtrlHandler(self.handle, 0) == 0:
                 import ctypes
-                raise ctypes.WinError()  # type: ignore
+                raise ctypes.WinError()
 # }}}
 
 
@@ -456,8 +456,7 @@ class Offsets:
             self.next_offset = -1
         self.previous_offset = self.offset - delta
         self.previous_offset = max(self.previous_offset, 0)
-        self.last_offset = last_allowed_index - delta
-        self.last_offset = max(self.last_offset, 0)
+        self.last_offset = (last_allowed_index // delta) * delta
 
 
 _use_roman = None
