@@ -31,7 +31,7 @@ dependencies = [
 	"apsw == 3.53.2.0",
 	"webencodings == 0.5.1",
 	"html5lib == 1.1",
-	"pillow == 12.2.0",
+	"pillow == 12.3.0",
 	"netifaces == 0.11.0",
 	"psutil == 7.1.3",
 	"ifaddr == 0.2.0",
@@ -164,7 +164,7 @@ allow-dict-calls-with-keyword-arguments = true
 
 [tool.ruff.lint.flake8-quotes]
 avoid-escape = true
-docstring-quotes = 'single'
+docstring-quotes = 'double'  # PEP 257
 inline-quotes = 'single'
 multiline-quotes = 'single'
 
