@@ -1,9 +1,5 @@
 #!/usr/bin/env python
-
-
-__license__   = 'GPL v3'
-__copyright__ = '2011, Kovid Goyal <kovid@kovidgoyal.net>'
-__docformat__ = 'restructuredtext en'
+# License: GPLv3 Copyright: 2011, Kovid Goyal <kovid@kovidgoyal.net>
 
 import json
 import os
@@ -18,17 +14,7 @@ from calibre.utils.logging import GUILog
 
 
 class ThreadedJob(BaseJob):
-
-    def __init__(self,
-            type_, description,
-
-            func, args, kwargs,
-
-            callback,
-
-            max_concurrent_count=1,
-            killable=True,
-            log=None):
+    def __init__(self, type_, description, func, args, kwargs, callback, max_concurrent_count=1, killable=True, log=None):
         """
         A job that is run in its own thread in the calibre main process
 
@@ -98,6 +84,7 @@ class ThreadedJob(BaseJob):
             self.callback(self)
         except Exception:
             import traceback
+
             traceback.print_exc()
         self._cleanup()
 
@@ -168,7 +155,6 @@ class ThreadedJob(BaseJob):
 
 
 class ThreadedJobWorker(Thread):
-
     def __init__(self, job):
         Thread.__init__(self)
         self.daemon = True
@@ -181,12 +167,12 @@ class ThreadedJobWorker(Thread):
             import traceback
 
             from calibre import prints
+
             prints('Job had unhandled exception:', self.job.description)
             traceback.print_exc()
 
 
 class ThreadedJobServer(Thread):
-
     def __init__(self):
         Thread.__init__(self)
         self.daemon = True
@@ -213,6 +199,7 @@ class ThreadedJobServer(Thread):
                 self.run_once()
             except Exception:
                 import traceback
+
                 traceback.print_exc()
             time.sleep(0.1)
 

@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
+# License: GPLv3 Copyright: 2011, John Schember <john@nachtimwald.com>
+
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 store_version = 2  # Needed for dynamic plugin loading
-
-__license__ = 'GPL 3'
-__copyright__ = '2011, John Schember <john@nachtimwald.com>'
-__docformat__ = 'restructuredtext en'
 
 import mimetypes
 from contextlib import closing
@@ -68,7 +66,7 @@ def search_manybooks(query, max_results=10, timeout=60, open_search_url='http://
             s.author = ', '.join(data.xpath('./*[local-name() = "author"]//text()')).strip()
 
             # Follow the detail link to get the rest of the info.
-            with closing(br.open(detail_href, timeout=timeout/4)) as df:
+            with closing(br.open(detail_href, timeout=timeout / 4)) as df:
                 ddoc = safe_xml_fromstring(df.read())
                 ddata = ddoc.xpath('//*[local-name() = "entry"][1]')
                 if ddata:
@@ -102,7 +100,6 @@ def search_manybooks(query, max_results=10, timeout=60, open_search_url='http://
 
 
 class ManyBooksStore(BasicStoreConfig, OpenSearchOPDSStore):
-
     open_search_url = 'http://www.manybooks.net/opds/'
     web_url = 'http://manybooks.net'
 
@@ -113,5 +110,6 @@ class ManyBooksStore(BasicStoreConfig, OpenSearchOPDSStore):
 
 if __name__ == '__main__':
     import sys
+
     for result in search_manybooks(' '.join(sys.argv[1:])):
         print(result)

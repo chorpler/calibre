@@ -1,6 +1,4 @@
-__license__ = 'GPL 3'
-__copyright__ = '2009, John Schember <john@nachtimwald.com>'
-__docformat__ = 'restructuredtext en'
+# License: GPLv3 Copyright: 2009, John Schember <john@nachtimwald.com>
 
 import re
 
@@ -32,7 +30,7 @@ class TCRCompressor:
         The intent is to create more unused codes.
         """
         possible_codes = []
-        a_code = set(re.findall(br'(?ms).', self.coded_txt))
+        a_code = set(re.findall(rb'(?ms).', self.coded_txt))
 
         for code in a_code:
             single_code = set(re.findall(b'(?ms)%s.' % re.escape(code), self.coded_txt))
@@ -57,7 +55,7 @@ class TCRCompressor:
         """
         Create new codes from codes that occur in pairs often.
         """
-        possible_new_codes = list(set(re.findall(br'(?ms)..', self.coded_txt)))
+        possible_new_codes = list(set(re.findall(rb'(?ms)..', self.coded_txt)))
         new_codes_count = []
 
         for c in possible_new_codes:
@@ -74,7 +72,7 @@ class TCRCompressor:
     def compress(self, txt):
         self._reset()
 
-        self.codes = list(set(re.findall(br'(?ms).', txt)))
+        self.codes = list(set(re.findall(rb'(?ms).', txt)))
 
         # Replace the text with their corresponding code
         # FIXME: python3 is native bytearray, but all we want are bytes
@@ -112,7 +110,7 @@ class TCRCompressor:
                 code_dict.append(int_to_byte(len(self.codes[i])) + self.codes[i])
 
         # Join the identifier with the dictionary and coded text.
-        return b'!!8-Bit!!'+b''.join(code_dict)+self.coded_txt
+        return b'!!8-Bit!!' + b''.join(code_dict) + self.coded_txt
 
 
 def decompress(stream):

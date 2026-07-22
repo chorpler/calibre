@@ -1,10 +1,8 @@
+# License: GPLv3 Copyright: 2009, John Schember <john@nachtimwald.com>
+
 """
 Read content from ereader pdb file.
 """
-
-__license__   = 'GPL v3'
-__copyright__ = '2009, John Schember <john@nachtimwald.com>'
-__docformat__ = 'restructuredtext en'
 
 from calibre.ebooks.pdb.ereader import EreaderError
 from calibre.ebooks.pdb.ereader.reader132 import Reader132
@@ -13,7 +11,6 @@ from calibre.ebooks.pdb.formatreader import FormatReader
 
 
 class Reader(FormatReader):
-
     def __init__(self, header, stream, log, options):
         record0_size = len(header.section_data(0))
 

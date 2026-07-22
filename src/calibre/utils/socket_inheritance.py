@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-
 """
 Created on 29 Nov 2013
 
@@ -20,6 +19,7 @@ def get_socket_inherit(s):
         return s.get_inheritable()
     except Exception:
         import traceback
+
         traceback.print_exc()
 
 
@@ -38,11 +38,13 @@ def set_socket_inherit(s, inherit=False):
         s.set_inheritable(inherit)
     except Exception:
         import traceback
+
         traceback.print_exc()
 
 
 def test():
     import socket
+
     s = socket.socket()
     orig = get_socket_inherit(s)
     set_socket_inherit(s, orig ^ True)

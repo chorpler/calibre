@@ -1,6 +1,4 @@
-__license__ = 'GPL 3'
-__copyright__ = '2011, John Schember <john@nachtimwald.com>'
-__docformat__ = 'restructuredtext en'
+# License: GPLv3 Copyright: 2011, John Schember <john@nachtimwald.com>
 
 import traceback
 from contextlib import closing
@@ -99,7 +97,6 @@ class SearchThreadPool(GenericDownloadThreadPool):
 
 
 class SearchThread(Thread):
-
     def __init__(self, tasks, results):
         Thread.__init__(self)
         self.daemon = True
@@ -129,7 +126,6 @@ class SearchThread(Thread):
 
 
 class CoverThreadPool(GenericDownloadThreadPool):
-
     def __init__(self, thread_count):
         GenericDownloadThreadPool.__init__(self, CoverThread, thread_count)
 
@@ -143,7 +139,6 @@ def decode_data_url(url):
 
 
 class CoverThread(Thread):
-
     def __init__(self, tasks, results):
         Thread.__init__(self)
         self.daemon = True
@@ -175,7 +170,6 @@ class CoverThread(Thread):
 
 
 class DetailsThreadPool(GenericDownloadThreadPool):
-
     def __init__(self, thread_count):
         GenericDownloadThreadPool.__init__(self, DetailsThread, thread_count)
 
@@ -185,7 +179,6 @@ class DetailsThreadPool(GenericDownloadThreadPool):
 
 
 class DetailsThread(Thread):
-
     def __init__(self, tasks, results):
         Thread.__init__(self)
         self.daemon = True
@@ -210,7 +203,6 @@ class DetailsThread(Thread):
 
 
 class CacheUpdateThreadPool(GenericDownloadThreadPool):
-
     def __init__(self, thread_count):
         GenericDownloadThreadPool.__init__(self, CacheUpdateThread, thread_count)
 
@@ -220,7 +212,6 @@ class CacheUpdateThreadPool(GenericDownloadThreadPool):
 
 
 class CacheUpdateThread(Thread):
-
     def __init__(self, tasks, results):
         Thread.__init__(self)
         self.daemon = True

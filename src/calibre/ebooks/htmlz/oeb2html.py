@@ -1,10 +1,8 @@
-__license__ = 'GPL 3'
-__copyright__ = '2011, John Schember <john@nachtimwald.com>'
-__docformat__ = 'restructuredtext en'
+# License: GPLv3 Copyright: 2011, John Schember <john@nachtimwald.com>
 
-'''
+"""
 Transform OEB content into a single (more or less) HTML file.
-'''
+"""
 
 import os
 import re
@@ -83,6 +81,7 @@ class OEB2HTML:
 
     def map_resources(self, oeb_book):
         from operator import attrgetter
+
         images = sorted((item for item in oeb_book.manifest if item.media_type in OEB_IMAGES), key=attrgetter('href'))
         for item in images:
             if item.href not in self.images:
@@ -90,6 +89,7 @@ class OEB2HTML:
                 fname = f'{len(self.images):06d}{ext}'
                 self.images[item.href] = fname
         from calibre.ebooks.oeb.polish.utils import OEB_FONTS
+
         fonts = sorted((item for item in oeb_book.manifest if item.media_type in OEB_FONTS), key=attrgetter('href'))
         for item in fonts:
             if item.href not in self.fonts:
@@ -169,11 +169,9 @@ class OEB2HTMLNoCSSizer(OEB2HTML):
         """
 
         # We can only processes tags. If there isn't a tag return any text.
-        if not isinstance(elem.tag, (str, bytes)) \
-           or namespace(elem.tag) not in (XHTML_NS, SVG_NS):
+        if not isinstance(elem.tag, (str, bytes)) or namespace(elem.tag) not in (XHTML_NS, SVG_NS):
             p = elem.getparent()
-            if p is not None and isinstance(p.tag, (str, bytes)) and namespace(p.tag) in (XHTML_NS, SVG_NS) \
-                    and elem.tail:
+            if p is not None and isinstance(p.tag, (str, bytes)) and namespace(p.tag) in (XHTML_NS, SVG_NS) and elem.tail:
                 return [elem.tail]
             return ['']
 
@@ -189,8 +187,7 @@ class OEB2HTMLNoCSSizer(OEB2HTML):
         tags.append(tag)
 
         # Ignore anything that is set to not be displayed.
-        if style['display'] in ('none', 'oeb-page-head', 'oeb-page-foot') \
-           or style['visibility'] == 'hidden':
+        if style['display'] in ('none', 'oeb-page-head', 'oeb-page-foot') or style['visibility'] == 'hidden':
             return ['']
 
         # Remove attributes we won't want.
@@ -259,11 +256,9 @@ class OEB2HTMLInlineCSSizer(OEB2HTML):
         """
 
         # We can only processes tags. If there isn't a tag return any text.
-        if not isinstance(elem.tag, (str, bytes)) \
-           or namespace(elem.tag) not in (XHTML_NS, SVG_NS):
+        if not isinstance(elem.tag, (str, bytes)) or namespace(elem.tag) not in (XHTML_NS, SVG_NS):
             p = elem.getparent()
-            if p is not None and isinstance(p.tag, (str, bytes)) and namespace(p.tag) in (XHTML_NS, SVG_NS) \
-                    and elem.tail:
+            if p is not None and isinstance(p.tag, (str, bytes)) and namespace(p.tag) in (XHTML_NS, SVG_NS) and elem.tail:
                 return [elem.tail]
             return ['']
 
@@ -352,8 +347,13 @@ class OEB2HTMLClassCSSizer(OEB2HTML):
         else:
             css = '<style type="text/css">' + self.get_css(oeb_book) + '</style>'
         title = f'<title>{prepare_string_for_xml(self.book_title)}</title>'
-        output = ['<html><head><meta http-equiv="Content-Type" content="text/html;charset=utf-8" />'] + \
-            [css] + [title, '</head><body>'] + output + ['</body></html>']
+        output = (
+            ['<html><head><meta http-equiv="Content-Type" content="text/html;charset=utf-8" />']
+            + [css]
+            + [title, '</head><body>']
+            + output
+            + ['</body></html>']
+        )
         return ''.join(output)
 
     def dump_text(self, elem, stylizer, page):
@@ -363,11 +363,9 @@ class OEB2HTMLClassCSSizer(OEB2HTML):
         """
 
         # We can only processes tags. If there isn't a tag return any text.
-        if not isinstance(elem.tag, (str, bytes)) \
-           or namespace(elem.tag) not in (XHTML_NS, SVG_NS):
+        if not isinstance(elem.tag, (str, bytes)) or namespace(elem.tag) not in (XHTML_NS, SVG_NS):
             p = elem.getparent()
-            if p is not None and isinstance(p.tag, (str, bytes)) and namespace(p.tag) in (XHTML_NS, SVG_NS) \
-                    and elem.tail:
+            if p is not None and isinstance(p.tag, (str, bytes)) and namespace(p.tag) in (XHTML_NS, SVG_NS) and elem.tail:
                 return [elem.tail]
             return ['']
 

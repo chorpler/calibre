@@ -1,9 +1,8 @@
+# License: GPLv3 Copyright: 2008, Marshall T. Vandegrift <llasram@gmail.com>
+
 """
 Dynamic language lookup of translations for user-visible strings.
 """
-
-__license__   = 'GPL v3'
-__copyright__ = '2008, Marshall T. Vandegrift <llasram@gmail.com>'
 
 import io
 from gettext import GNUTranslations
@@ -24,8 +23,7 @@ def translate(lang, text):
     else:
         mpath = get_lc_messages_path(lang)
         if mpath is not None:
-            with ZipFile(get_path('localization/locales.zip',
-                allow_user_override=False), 'r') as zf:
+            with ZipFile(get_path('localization/locales.zip', allow_user_override=False), 'r') as zf:
                 try:
                     buf = io.BytesIO(zf.read(mpath + '/messages.mo'))
                 except Exception:

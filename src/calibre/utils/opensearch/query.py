@@ -1,6 +1,4 @@
-__license__ = 'GPL 3'
-__copyright__ = '2006, Ed Summers <ehs@pobox.com>'
-__docformat__ = 'restructuredtext en'
+# License: GPLv3 Copyright: 2006, Ed Summers <ehs@pobox.com>
 
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -18,8 +16,7 @@ class Query:
     print q.url()
     """
 
-    standard_macros = ['searchTerms', 'count', 'startIndex', 'startPage',
-        'language', 'outputEncoding', 'inputEncoding']
+    standard_macros = ['searchTerms', 'count', 'startIndex', 'startPage', 'language', 'outputEncoding', 'inputEncoding']
 
     searchTerms: str
     count: int
@@ -46,7 +43,7 @@ class Query:
         # opensearch names to the service specific ones
         # so q={searchTerms} will result in a mapping between searchTerms and q
         self.macro_map = {}
-        for key,values in self.query_string.items():
+        for key, values in self.query_string.items():
             # TODO eventually optional/required params should be
             # distinguished somehow (the ones with/without trailing ?
             macro = values[0].replace('{', '').replace('}', '').replace('?', '')
