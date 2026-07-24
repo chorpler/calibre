@@ -78,6 +78,7 @@ def go_to_line(lnum, sync_context):
 
 
 @from_python
+@no_prune
 def go_to_sourceline_address(sourceline, tags, sync_context):
     nodes = document.querySelectorAll(f'[data-lnum="{sourceline}"]')
     for index in range(nodes.length):
@@ -91,7 +92,7 @@ def go_to_sourceline_address(sourceline, tags, sync_context):
 
 def line_numbers():
     found_body = False
-    ans = v'[]'
+    ans = []
     for node in document.getElementsByTagName('*'):
         if not found_body and node.tagName.toLowerCase() is 'body':
             found_body = True
@@ -110,6 +111,7 @@ def find_blocks():
 
 
 @from_python
+@no_prune
 def set_split_mode(enabled):
     state.in_split_mode = enabled
     document.body.dataset.inSplitMode = '1' if enabled else '0'
@@ -118,8 +120,8 @@ def set_split_mode(enabled):
 
 
 def report_split(node):
-    loc = v'[]'
-    totals = v'[]'
+    loc = []
+    totals = []
     parent = find_containing_block(node)
     while parent and parent.tagName.toLowerCase() is not 'body':
         totals.push(parent.parentNode.children.length)
@@ -154,6 +156,7 @@ def onclick(event):
 
 
 @from_python
+@no_prune
 def go_to_anchor(anchor):
     elem = document.getElementById(anchor)
     if not elem:
@@ -166,9 +169,10 @@ def go_to_anchor(anchor):
 
 
 @from_python
+@no_prune
 def live_css(editor_name, sourceline, tags):
     all_properties = {}
-    ans = {'nodes': v'[]', 'computed_css': all_properties, 'editor_name': editor_name, 'sourceline': sourceline, 'tags': tags}
+    ans = {'nodes': [], 'computed_css': all_properties, 'editor_name': editor_name, 'sourceline': sourceline, 'tags': tags}
     target = None
     i = 0
     for node in document.querySelectorAll(f'[data-lnum="{sourceline}"]'):

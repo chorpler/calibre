@@ -37,7 +37,7 @@ def parse_error_msg(msg):
 
 def get_toc_data(book):
     spine = book.manifest.spine
-    spine_toc_map = {name: v'[]' for name in spine}
+    spine_toc_map = {name: [] for name in spine}
     parent_map = {}
     toc_id_map = {}
 
@@ -211,7 +211,10 @@ Regex: Interpret the entered text as a regular expression'''),
                 self.result_handler = None
                 if self.initial_search_result_counter is 0:
                     self.view.hide_loading()
-                    window.alert(_('The full text search query {} was not found in the book, try a manual search.').format(self.initial_search_human_readable_query))
+                    window.alert(
+                        _('The full text search query {} was not found in the book, try a manual search.')
+                        .format(self.initial_search_human_readable_query)
+                    )
                 self.initial_search_result_counter = 0
             elif msg.type is 'search_result':
                 self.initial_search_result_counter += 1
@@ -293,7 +296,7 @@ Regex: Interpret the entered text as a regular expression'''),
         ul = group.getElementsByTagName('ul')[0]
         tt = ''
         if result.toc_nodes.length:
-            lines = v'[]'
+            lines = []
             for i, node_id in enumerate(result.toc_nodes):
                 lines.push('\xa0\xa0' * i + '➤ ' + (self.toc_data.toc_id_map[node_id]?.title or _('Unknown')))
             tt = ngettext('Table of Contents section:', 'Table of Contents sections:', lines.length)

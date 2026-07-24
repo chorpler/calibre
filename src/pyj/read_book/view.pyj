@@ -55,7 +55,10 @@ from viewer.constants import CHARS_PER_PAGE
 
 add_extra_css(def ():
     sel = '.book-side-margin'
-    ans = build_rule(sel, cursor='pointer', text_align='center', height='100dvh', user_select='none', display='flex', align_items='center', justify_content='space-between', flex_direction='column')
+    ans = build_rule(
+        sel, cursor='pointer', text_align='center', height='100dvh', user_select='none',
+        display='flex', align_items='center', justify_content='space-between', flex_direction='column'
+    )
     ans += build_rule(sel + ' > .arrow', display='none')
     ans += build_rule(sel + ' > *', max_width='100%', overflow='hidden')
     ans += build_rule(sel + ':hover > .not-arrow', display='none')
@@ -140,7 +143,20 @@ def show_controls_help():
     if container.firstChild:
         container.removeChild(container.firstChild)
 
-    container.appendChild(E.div(style=f'overflow: hidden; width: 100vw; height: 100dvh; text-align: center; font-size: 1.3rem; font-weight: bold; background: {get_color("window-background")};' + 'display:flex; flex-direction: column; align-items: stretch', E.div(msg(_('Tap (or right click) for controls')), style='height: 25dvh; display:flex; align-items: center; border-bottom: solid 2px currentColor',), E.div(style='display: flex; align-items: stretch; flex-grow: 10', E.div(left_msg, style=f'width: {left_width}; flex-grow: {left_grow}; display:flex; align-items: center; border-right: solid 2px currentColor',), E.div(right_msg, style=f'width: {right_width}; display:flex; flex-grow: {right_grow}; align-items: center',))))
+    container.appendChild(E.div(
+        style=f'overflow: hidden; width: 100vw; height: 100dvh; text-align: center;'
+        + f' font-size: 1.3rem; font-weight: bold; background: {get_color("window-background")};'
+        + 'display:flex; flex-direction: column; align-items: stretch',
+        E.div(
+            msg(_('Tap (or right click) for controls')),
+            style='height: 25dvh; display:flex; align-items: center; border-bottom: solid 2px currentColor',
+        ),
+        E.div(
+            style='display: flex; align-items: stretch; flex-grow: 10',
+            E.div(left_msg, style=f'width: {left_width}; flex-grow: {left_grow}; display:flex; align-items: center; border-right: solid 2px currentColor',),
+            E.div(right_msg, style=f'width: {right_width}; display:flex; flex-grow: {right_grow}; align-items: center',),
+        ),
+    ))
 
 
 # }}}
@@ -169,7 +185,8 @@ def margin_elem(sd, which, id, onclick, oncontextmenu):
     fsz = header_footer_font_size(sz)
     s = '; text-overflow: ellipsis; white-space: nowrap; overflow: hidden'
     ans = E.div(
-        style=f'height:{sz}px; overflow: hidden; font-size:{fsz}px; width:100%; padding: 0; display: flex; justify-content: space-between; align-items: center; user-select: none; cursor: pointer',
+        style=f'height:{sz}px; overflow: hidden; font-size:{fsz}px; width:100%; padding: 0;'
+        + ' display: flex; justify-content: space-between; align-items: center; user-select: none; cursor: pointer',
         class_='book-h-margin',
         id=id,
         E.div(style='margin-right: 1.5em' + s),
@@ -208,7 +225,7 @@ class View:
         self.unsynced_message = ''
         self.last_position_data = None
         self.current_toc_node = self.current_toc_toplevel_node = None
-        self.current_toc_families = v'[]'
+        self.current_toc_families = []
         self.report_cfi_callbacks = {}
         self.get_cfi_counter = 0
         self.show_loading_callback_timer = None
@@ -279,29 +296,41 @@ class View:
         }
         iframe, self.iframe_wrapper = create_wrapped_iframe(handlers, _('Bootstrapping book reader...'), entry_point, iframe_kw)
         container.appendChild(
-            E.div(style='max-height: 100dvh; width: 100%; max-width: 100%; height: 100dvh; overflow: hidden; overflow-x: hidden; display: flex; align-items: stretch',  # container for horizontally aligned panels
+            # container for horizontally aligned panels
+            E.div(style='max-height: 100dvh; width: 100%; max-width: 100%; height: 100dvh;'
+                  + ' overflow: hidden; overflow-x: hidden; display: flex; align-items: stretch',
                 oncontextmenu=def (ev):
                     if not default_context_menu_should_be_allowed(ev):
                         ev.preventDefault()
                 ,
-                E.div(style='max-height: 100dvh; min-width: 0; display: flex; flex-direction: column; align-items: stretch; flex-grow:2',  # container for iframe and any other panels in the same column
-                    E.div(style='position: relative; max-height: 100dvh; min-width: 0; flex-grow: 2; display:flex; align-items: stretch; overflow: hidden',  # container for iframe and its overlay
+                # container for iframe and any other panels in the same column
+                E.div(style='max-height: 100dvh; min-width: 0; display: flex; flex-direction: column; align-items: stretch; flex-grow:2',
+                    # container for iframe and its overlay
+                    E.div(style='position: relative; max-height: 100dvh; min-width: 0; flex-grow: 2; display:flex; align-items: stretch; overflow: hidden',
                         left_margin,
-                        E.div(style='min-width: 0; flex-grow:2; display:flex; align-items:stretch; flex-direction: column; overflow-x: hidden',  # container for top and bottom margins
+                        # container for top and bottom margins
+                        E.div(style='min-width: 0; flex-grow:2; display:flex; align-items:stretch; flex-direction: column; overflow-x: hidden',
                             margin_elem(sd, 'margin_top', 'book-top-margin', self.top_margin_clicked, self.margin_context_menu.bind(None, 'top')),
                             iframe,
                             margin_elem(sd, 'margin_bottom', 'book-bottom-margin', self.bottom_margin_clicked, self.margin_context_menu.bind(None, 'bottom')),
                         ),
                         right_margin,
                         self.book_scrollbar.create(),
-                        E.div(style='position: absolute; top:0; left:0; width: 100%; height: 100%; display:none;', id='book-selection-bar-overlay'),  # selection bar overlay
-                        E.div(style='position: absolute; top:0; left:0; width: 100%; height: 100%; display:none;', id='book-read-aloud-overlay'),  # read aloud overlay
+                        # selection bar overlay
+                        E.div(style='position: absolute; top:0; left:0; width: 100%; height: 100%; display:none;', id='book-selection-bar-overlay'),
+                        # read aloud overlay
+                        E.div(style='position: absolute; top:0; left:0; width: 100%; height: 100%; display:none;', id='book-read-aloud-overlay'),
                         E.div(style='position: absolute; top:0; left:0; width: 100%; height: 100%; display:none;', id='book-hints-overlay'),  # hints overlay
-                        E.div(style='position: absolute; top:0; left:0; width: 100%; height:100%; display:none', id=SearchOverlay.CONTAINER_ID),  # search overlay
-                        E.div(style='position: absolute; top:0; left:0; width: 100%; height: 100%; display:none', id='book-content-popup-overlay'),  # content popup overlay
-                        E.div(style='position: absolute; top:0; left:0; width: 100%; height: 100%; overflow: auto; display:none', id='book-overlay'),  # main overlay
-                        E.div(style='position: absolute; top:0; left:0; width: 100%; height: 100%; display:none', id='controls-help-overlay'),  # controls help overlay
-                        E.div(style='position: absolute; bottom:0em; width: 100%; height: 100%; display:none', id='audio-ebooks-overlay'),  # read audio ebook overlay
+                        # search overlay
+                        E.div(style='position: absolute; top:0; left:0; width: 100%; height:100%; display:none', id=SearchOverlay.CONTAINER_ID),
+                        # content popup overlay
+                        E.div(style='position: absolute; top:0; left:0; width: 100%; height: 100%; display:none', id='book-content-popup-overlay'),
+                        # main overlay
+                        E.div(style='position: absolute; top:0; left:0; width: 100%; height: 100%; overflow: auto; display:none', id='book-overlay'),
+                        # controls help overlay
+                        E.div(style='position: absolute; top:0; left:0; width: 100%; height: 100%; display:none', id='controls-help-overlay'),
+                        # read audio ebook overlay
+                        E.div(style='position: absolute; bottom:0em; width: 100%; height: 100%; display:none', id='audio-ebooks-overlay'),
                     )
                 ),
             ),
@@ -319,10 +348,10 @@ class View:
         self.read_aloud = ReadAloud(self)
         self.read_audio_ebook = ReadAudioEbook(self)
         self.hints = Hints(self)
-        self.modal_overlays = v'[self.selection_bar, self.read_aloud, self.hints, self.read_audio_ebook]'
+        self.modal_overlays = [self.selection_bar, self.read_aloud, self.hints, self.read_audio_ebook]
         self.processing_spine_item_display = False
         self.pending_load = None
-        self.currently_showing = {'selection': {'empty': True}, 'on_load': v'[]'}
+        self.currently_showing = {'selection': {'empty': True}, 'on_load': []}
         self.book_scrollbar.apply_visibility()
         self.annotations_manager = AnnotationsManager(self)
 
@@ -963,8 +992,8 @@ class View:
             else:
                 if unkey and book.annotations_map[unkey]:
                     hl = book.annotations_map[unkey].highlight
-                    self.annotations_manager.set_bookmarks(book.annotations_map[unkey].bookmark or v'[]')
-            self.annotations_manager.set_highlights(hl or v'[]')
+                    self.annotations_manager.set_bookmarks(book.annotations_map[unkey].bookmark or [])
+            self.annotations_manager.set_highlights(hl or [])
             if runtime.is_standalone_viewer:
                 add_book_to_recently_viewed(book)
         if ui_operations.update_last_read_time:
@@ -1066,7 +1095,7 @@ class View:
         idx = spine.indexOf(name)
         self.currently_showing = {
             'name': name, 'settings': self.iframe_settings(name), 'initial_position': initial_position,
-            'loading': True, 'spine_index': idx, 'selection': {'empty': True}, 'on_load': v'[]',
+            'loading': True, 'spine_index': idx, 'selection': {'empty': True}, 'on_load': [],
         }
         self.timers.set_chapter(name)
         self.show_loading()
@@ -1416,7 +1445,7 @@ class View:
         else:
             self.current_toc_node = self.current_toc_toplevel_node = None
         if runtime.is_standalone_viewer:
-            r = v'[]'
+            r = []
             for fam in self.current_toc_families:
                 if fam.length:
                     r.push(fam[-1].id)
@@ -1469,7 +1498,7 @@ class View:
             self.read_aloud.play()
         for x in self.currently_showing.on_load:
             x()
-        self.currently_showing.on_load = v'[]'
+        self.currently_showing.on_load = []
 
     def set_progress_frac(self, progress_frac, file_progress_frac, page_counts):
         self.current_progress_frac = progress_frac or 0
@@ -1500,7 +1529,9 @@ class View:
         if sr.search_finished:
             if self.search_result_discovery:
                 self.search_result_discovery.finished = True
-                if not self.search_result_discovery.discovered and self.search_result_discovery.first_search_result and self.search_result_discovery.queue.length is 0:
+                if (not self.search_result_discovery.discovered
+                        and self.search_result_discovery.first_search_result
+                        and self.search_result_discovery.queue.length is 0):
                     sr = self.search_result_discovery.first_search_result
                     sr.force_jump_to = True
                     self.search_result_discovery.jump_forced = True
@@ -1508,7 +1539,7 @@ class View:
             return
         if sr.result_num is 1:
             self.search_result_discovery = {
-                'queue': v'[]', 'on_discovery': sr.on_discovery, 'in_flight': None, 'discovered': False,
+                'queue': [], 'on_discovery': sr.on_discovery, 'in_flight': None, 'discovered': False,
                 'first_search_result': sr, 'finished': False, 'jump_forced': False,
             }
         if not self.search_result_discovery or self.search_result_discovery.discovered or self.search_result_discovery.on_discovery is not sr.on_discovery:

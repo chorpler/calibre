@@ -44,7 +44,7 @@ class CACerts(Command):  # {{{
             with open(opts.path_to_cacerts, 'rb') as f:
                 raw = f.read()
         else:
-            raw = download_securely('https://curl.haxx.se/ca/cacert.pem')
+            raw = download_securely('https://curl.se/ca/cacert.pem')
             if not raw:
                 raise RuntimeError('Failed to download CA cert bundle')
         if os.path.exists(self.CA_PATH):
@@ -92,6 +92,10 @@ class RapydScript(Command):  # {{{
 
     def run(self, opts):
         from calibre.utils.rapydscript import compile_all, compile_editor, compile_srv, compile_viewer
+
+        bin_dir = self.j(self.PROJECT_ROOT, '.venv', 'bin')
+        if os.path.exists(bin_dir):
+            os.environ['PATH'] = bin_dir + ':' + os.environ['PATH']
 
         if opts.only_module:
             match opts.only_module:

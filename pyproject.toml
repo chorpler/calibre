@@ -91,13 +91,15 @@ dev = [
     "ruff >= 0.15.21",
     "types-lxml >= 2026.2.16",
     "ty >= 0.0.59",
+    "rapydscript-ng >= 0.8.4",
 ]
 
 [tool.ruff]
 line-length = 160
 builtins = ['_', 'I', 'P']
 include = ['*.py', '*.pyi', '*.recipe']
-exclude = [
+extension = { recipe = "python" }
+extend-exclude = [
     "*_ui.py",
     "bypy/*",
     "setup/polib.py",
@@ -154,10 +156,7 @@ known-first-party = ["calibre_extensions", "calibre_plugins", "polyglot"]
 known-third-party = ["odf", "qt", "tinycss", "css_selectors"]
 relative-imports-order = "closest-to-furthest"
 split-on-trailing-comma = false
-section-order = ['__python__', "future", "standard-library", "third-party", "first-party", "local-folder"]
-
-[tool.ruff.lint.isort.sections]
-'__python__' = ['__python__']
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
 
 [tool.ruff.lint.flake8-comprehensions]
 allow-dict-calls-with-keyword-arguments = true

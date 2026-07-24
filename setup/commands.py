@@ -11,9 +11,11 @@ __all__ = [
     'build_dep',
     'cacerts',
     'check',
+    'check_all',
     'develop',
     'export_packages',
     'extdev',
+    'fmt',
     'get_translations',
     'git_hooks',
     'git_version',
@@ -123,9 +125,10 @@ from setup.gui import GUI
 
 gui = GUI()
 
-from setup.check import Check, UpgradeSourceCode
+from setup.check import Check, CheckAll, UpgradeSourceCode
 
 check = Check()
+check_all = CheckAll()
 upgrade_source_code = UpgradeSourceCode()
 
 from setup.test import Test, TestRS
@@ -136,6 +139,11 @@ test_rs = TestRS()
 from setup.type_check import TypeCheck
 
 type_check = TypeCheck()
+
+
+from setup.fmt import AutoFormat
+
+fmt = AutoFormat()
 
 from setup.resources import CACerts, RapydScript, RecentUAs, Resources
 
