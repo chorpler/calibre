@@ -526,9 +526,7 @@ class BuildTest(unittest.TestCase):
 
     def test_feedparser(self):
         # sgmllib is needed for feedparser parsing malformed feeds
-        # on python3 you can get it by taking it from python2 stdlib and
-        # running 2to3 on it
-        import sgmllib
+        import feedparser_sgmllib as sgmllib
 
         from calibre.web.feeds.feedparser import parse  # type: ignore
 
@@ -606,7 +604,7 @@ def find_tests(only_build=False):
 def test():
     from calibre.utils.run_tests import run_cli
 
-    run_cli(find_tests())
+    run_cli(find_tests(), buffer=False)
 
 
 def test_qt_main():

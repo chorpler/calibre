@@ -28,7 +28,10 @@ class projectsynd(BasicNewsRecipe):
     def get_browser(self, *args, **kwargs):
         kwargs['user_agent'] = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
         br = BasicNewsRecipe.get_browser(self, *args, **kwargs)
-        br.addheaders += [('Referer', 'https://www.google.com/'), ('X-Forwarded-For', '66.249.66.1')]
+        br.addheaders += [
+            ('Referer', 'https://www.google.com/'),
+            ('X-Forwarded-For', '66.249.66.1'),
+        ]
         return br
 
     recipe_specific_options = {
@@ -56,7 +59,10 @@ class projectsynd(BasicNewsRecipe):
         dict(attrs={'aria-label': 'Author information'}),
     ]
 
-    remove_tags = [dict(name='source'), classes('inlay--slide slide__container editorpick-container  special--generic mrf--promotion')]
+    remove_tags = [
+        dict(name='source'),
+        classes('inlay--slide slide__container editorpick-container  special--generic mrf--promotion'),
+    ]
 
     feeds = [
         'https://www.project-syndicate.org/rss/section/economics',

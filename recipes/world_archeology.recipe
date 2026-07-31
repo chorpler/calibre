@@ -33,7 +33,24 @@ class worldarch(BasicNewsRecipe):
     '''
 
     keep_only_tags = [
-        dict(attrs={'class': lambda x: x and any(tag in x for tag in ['__image', '__header', '__background', '__body_area', '__author__text', '__date'])})
+        dict(
+            attrs={
+                'class': lambda x: (
+                    x
+                    and any(
+                        tag in x
+                        for tag in [
+                            '__image',
+                            '__header',
+                            '__background',
+                            '__body_area',
+                            '__author__text',
+                            '__date',
+                        ]
+                    )
+                )
+            }
+        )
     ]
 
     remove_tags = [
@@ -50,13 +67,17 @@ class worldarch(BasicNewsRecipe):
                 if w and isinstance(w, str):
                     res = '?w=' + w
                 img['src'] = img['src'].split('?')[0] + res
+            img.attrs = {'src': img['src']}
         exp = soup.find(attrs={'class': lambda x: x and 'post-subtitle' in x.split()})
         if exp:
             exp.name = 'p'
         return soup
 
     recipe_specific_options = {
-        'issue': {'short': 'Enter the Issue Number you want to download ', 'long': 'For example, 136'},
+        'issue': {
+            'short': 'Enter the Issue Number you want to download ',
+            'long': 'For example, 136',
+        },
         'res': {
             'short': 'For hi-res images, select a resolution from the\nfollowing options: 800, 1000, 1200 or 1500',
             'long': 'This is useful for non e-ink devices, and for a lower file size\nthan the default, use 400 or 300.',
