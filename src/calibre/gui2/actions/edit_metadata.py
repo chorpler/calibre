@@ -263,6 +263,18 @@ class EditMetadataAction(InterfaceActionWithLibraryDrop):
         from calibre.gui2.metadata.bulk_download import start_download
 
         update_sources()
+        if len(ids) > 15 and not confirm(
+            _(
+                'Too many books selected. Most metadata sources will block your computer'
+                ' if you try to download metadata for too many books, leading to download'
+                ' failures. You will most likely be able to download successfully only a few books a day. Proceed anyway?'
+            ),
+            'bulk-metadata-download-too-many',
+            parent=self.gui,
+            title=_('Too many books'),
+            confirm_msg=_('Show this warning again'),
+        ):
+            return
         start_download(self.gui, ids, Dispatcher(self.metadata_downloaded), ensure_fields=ensure_fields)
 
     def cleanup_bulk_download(self, tdir, *args):
@@ -563,7 +575,10 @@ class EditMetadataAction(InterfaceActionWithLibraryDrop):
 
     def set_current_callback(self, id_):
         db = self.gui.library_view.model().db
-        current_row = db.row(id_)
+        # safe_id_to_index returns -1 (handled as no-op by set_current_row/scroll_to_row)
+        # if the book is no longer in the view, e.g., because a metadata change caused
+        # it to leave the current virtual library filter.
+        current_row = db.data.safe_id_to_index(id_)
         self.gui.library_view.set_current_row(current_row)
         self.gui.library_view.scroll_to_row(current_row)
 

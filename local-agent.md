@@ -6,6 +6,8 @@ copy_resource: .ruff_cache
 copy_resource: .venv
 copy_resource: translations
 copy_resource: resources
+env PODOFO_PREFIX /opt/podofo-1
+prepend_to_path: develop
 pre_commit: ./setup.py fmt
 
 # System Instructions & Project Context
@@ -38,6 +40,12 @@ To isolate testing to a specific test use, use the test name without the leading
 "test" prefix. For example, to run a python test named test_my_function, use
 ```bash
 ./setup.py test my_function
+```
+
+To test changes to recipes for news download, you can run them as:
+
+```bash
+ebook-convert recipes/filename.recipe output.epub --test
 ```
 
 ## Verification Pipeline

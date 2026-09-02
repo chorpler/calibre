@@ -12,7 +12,7 @@ from functools import lru_cache
 from polyglot.builtins import environ_item, hasenv
 
 __appname__ = 'calibre'
-numeric_version = (9, 13, 0)
+numeric_version = (9, 14, 0)
 __version__ = '.'.join(map(str, numeric_version))
 git_version = None
 __author__ = 'Kovid Goyal <kovid@kovidgoyal.net>'
@@ -51,6 +51,7 @@ EDITOR_APP_UID = 'com.calibre-ebook.edit-book'
 MAIN_APP_UID = 'com.calibre-ebook.main-gui'
 STORE_DIALOG_APP_UID = 'com.calibre-ebook.store-dialog'
 TOC_DIALOG_APP_UID = 'com.calibre-ebook.toc-editor'
+CYOA_APP_UID = 'com.calibre-ebook.cyoa'
 try:
     preferred_encoding = locale.getpreferredencoding()
     codecs.lookup(preferred_encoding)
