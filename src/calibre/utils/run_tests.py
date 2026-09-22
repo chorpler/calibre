@@ -4,6 +4,7 @@
 import functools
 import importlib
 import importlib.resources
+import itertools
 import json
 import os
 import queue
@@ -258,9 +259,27 @@ def _worker_entry(write_fd_or_handle: int) -> None:
 
 
 def _chunk_round_robin(tests: list, num_workers: int) -> list[list]:
-    """Distribute tests evenly across workers using round-robin assignment."""
+    """Distribute tests evenly across workers using round-robin assignment.
+
+    A test class that is expensive to run in many processes at once caps how
+    many workers its own tests are spread over by setting *max_parallel_workers*
+    on itself.  Such tests are dealt out over that many workers and put at the
+    front of their chunks, so that they share whatever their class sets up once
+    per worker rather than once per test, and start straight away instead of
+    after the quick tests their worker also has to run.
+    """
     chunks: list[list] = [[] for _ in range(num_workers)]
-    for i, t in enumerate(tests):
+    capped, rest = [], []
+    for t in tests:
+        (capped if getattr(t, 'max_parallel_workers', 0) else rest).append(t)
+    start = 0
+    # The tests arrive sorted by id, so the ones from a single class are already together
+    for cls, group in itertools.groupby(capped, key=type):
+        width = max(1, min(getattr(cls, 'max_parallel_workers', 1), num_workers))
+        for i, t in enumerate(group):
+            chunks[(start + i % width) % num_workers].append(t)
+        start = (start + width) % num_workers
+    for i, t in enumerate(rest):
         chunks[i % num_workers].append(t)
     return [c for c in chunks if c]
 
@@ -551,7 +570,7 @@ class TestImports(unittest.TestCase):
     def test_import_of_all_python_modules(self):
 
         exclude_packages = {'calibre.devices.mtp.unix.upstream'}
-        exclude_modules = {'calibre.web.automate.browser'}
+        exclude_modules: set[str] = set()
         if not iswindows:
             exclude_modules |= {'calibre.utils.iphlpapi', 'calibre.utils.open_with.windows', 'calibre.devices.winusb'}
             exclude_packages |= {'calibre.utils.winreg', 'calibre.utils.windows'}
@@ -644,6 +663,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.docx.writer.utils import test_convert_color
 
         a(test_convert_color(return_tests=True))
+        from calibre.ebooks.docx.writer.tests import find_tests
+
+        a(find_tests())
     if ok('cfi'):
         from calibre.ebooks.epub.cfi.tests import find_tests
 
@@ -657,6 +679,15 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.web.automate.test_worker import find_tests
+
+        a(find_tests())
+        from calibre.web.automate.test_download_deps import find_tests
+
+        a(find_tests())
+        from calibre.web.automate.test_camoufox import find_tests
+
+        a(find_tests())
+        from calibre.web.automate.test_recipes import find_tests
 
         a(find_tests())
     if ok('icu'):
@@ -695,6 +726,12 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.html_entities import find_tests
 
         a(find_tests())
+        from calibre.ebooks.pdf.bidi_test import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.pdf.reflow_test import find_tests
+
+        a(find_tests())
         from calibre.spell.dictionary import find_tests
 
         a(find_tests())
@@ -715,6 +752,9 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.gui2.cyoa.data import find_tests
+
+        a(find_tests())
+        from calibre.gui2.cyoa.epub import find_tests
 
         a(find_tests())
     if ok('podofo'):
@@ -741,6 +781,9 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.utils.search_query_parser_test import find_tests
+
+        a(find_tests())
+        from calibre.utils.localization_test import find_tests
 
         a(find_tests())
         from calibre.utils.html2text import find_tests

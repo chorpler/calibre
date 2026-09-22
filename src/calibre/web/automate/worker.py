@@ -9,15 +9,17 @@ import secrets
 import socket
 import struct
 import sys
+import time
 from collections.abc import Awaitable, Callable
 from functools import partial
-from typing import Any, NamedTuple, cast
+from typing import IO, Any, NamedTuple, cast
 
 from calibre.constants import islinux, ismacos, iswindows
 from calibre.ptempfile import base_dir
 from calibre.utils.serialize import msgpack_dumps, msgpack_loads
 
 if iswindows:
+    import msvcrt
     from asyncio.windows_events import PipeServer
 
     from calibre_extensions import winutil
@@ -43,24 +45,25 @@ def get_random_socket_path(name: str, random_suffix: str = '') -> str:
     return os.path.join(base_dir(), f'{name}.sock')
 
 
-def debug(*a, **kw):
+def debug(*a: object, **kw: Any) -> None:  # noqa: ANN401
     kw['file'] = sys.stderr
     kw['flush'] = True
     print(*a, **kw)
 
 
 class SingleObjectProtocol(asyncio.Protocol):
-    def __init__(self, handler_callback: Handler):
+    def __init__(self, handler_callback: Handler) -> None:
         self.handler = handler_callback
-        self.transport = None
-        self.expected_length = None
-        self.task = None
+        self.transport: asyncio.Transport | None = None
+        self.expected_length: int | None = None
+        self.task: asyncio.Task[None] | None = None
         self._buffer = bytearray()
 
-    def connection_made(self, transport):
-        self.transport = transport
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        # asyncio.Protocol is always used with a bi-directional transport
+        self.transport = cast(asyncio.Transport, transport)
 
-    def data_received(self, data):
+    def data_received(self, data: bytes) -> None:
         self._buffer.extend(data)
         if self.expected_length is None and len(self._buffer) > 3:
             header = self._buffer[:4]
@@ -72,14 +75,20 @@ class SingleObjectProtocol(asyncio.Protocol):
             self.expected_length = None
             self.task = asyncio.create_task(self._process_and_respond(complete_data))
 
-    def eof_received(self):
+    def eof_received(self) -> bool:
         if self.task is None:
             payload = {'exception': 'Complete message not received from client'}
             assert self.transport is not None
             self.transport.write(msgpack_dumps(payload))
-        return False  # Returning False closes the transport
+            return False  # Returning False closes the transport
+        # The client half closes its end of the socket as soon as it has
+        # finished writing its request, which is long before a slow handler has
+        # an answer, so the transport must be left open for
+        # _process_and_respond() to close once it has written the reply
+        return True
 
-    async def _process_and_respond(self, data: bytearray):
+    async def _process_and_respond(self, data: bytearray) -> None:
+        payload: dict[str, Any] = {'exception': 'The request was abandoned before it could be answered'}
         try:
             data = msgpack_loads(data)
             self._buffer.clear()
@@ -90,17 +99,19 @@ class SingleObjectProtocol(asyncio.Protocol):
 
             payload = {'exception': str(e), 'traceback': traceback.format_exc()}
         finally:
+            # payload is bound before the try so that cancellation, which is
+            # not an Exception, still leaves the client with something to read
             assert self.transport is not None
             self.transport.write(msgpack_dumps(payload))
             self.transport.close()
 
 
-async def echo(x):
+async def echo(x: Any) -> Any:  # noqa: ANN401
     return x
 
 
 class Server:
-    def __init__(self, platform_implementation: asyncio.Server | list[asyncio.Transport]):
+    def __init__(self, platform_implementation: asyncio.Server | list[asyncio.Transport]) -> None:
         self.platform_implementation = platform_implementation
 
     def close(self) -> None:
@@ -181,7 +192,13 @@ async def no_setup() -> None:
     pass
 
 
-async def handler_with_setup(x: Any, handler: Handler, setup: Callable[[], Awaitable[None]], setup_done: asyncio.Event, setup_lock: asyncio.Lock) -> Any:
+async def handler_with_setup(
+    x: Any,  # noqa: ANN401
+    handler: Handler,
+    setup: Callable[[], Awaitable[None]],
+    setup_done: asyncio.Event,
+    setup_lock: asyncio.Lock,
+) -> Any:  # noqa: ANN401
     if not setup_done.is_set():
         async with setup_lock:
             if not setup_done.is_set():
@@ -232,11 +249,11 @@ async def async_main(
         finalizer()
 
 
-def main(*a, **kw) -> None:
+def main(*a: Any, **kw: Any) -> None:  # noqa: ANN401
     asyncio.run(async_main(*a, **kw))
 
 
-def start_worker(handler: str = '', delayed_setup: str = '', finalizer: str = '', input_data: Any = None) -> tuple[str, Callable[[], None]]:
+def start_worker(handler: str = '', delayed_setup: str = '', finalizer: str = '', input_data: Any = None) -> tuple[str, Callable[[], int]]:  # noqa: ANN401
     """
     Run the specified handler, delayed_setup and finalizer functions in a worker process, passing input_data (if not None)
     to each function as its first parameter.
@@ -286,7 +303,7 @@ def start_worker(handler: str = '', delayed_setup: str = '', finalizer: str = ''
     except Exception:
         raise ValueError(f'Got invalid response from worker process: {path_data}')
 
-    def close_and_reap():
+    def close_and_reap() -> int:
         p.stdin.close()
         return p.wait()
 
@@ -299,12 +316,54 @@ class Response(NamedTuple):
     traceback: str = ''
 
 
-def make_request(worker_path: str, data: Any = None) -> Response:
+def connect_to_named_pipe(worker_path: str, timeout: float = 120.0) -> IO[bytes]:
+    """Connect to the worker's named pipe, waiting for a free instance of it.
+
+    asyncio's Windows pipe server (see asyncio.windows_events.PipeServer)
+    keeps only a single unconnected instance of the pipe around, creating the
+    next one only once a client has connected to the current one. So when
+    multiple clients connect at the same time all but one of them find the
+    pipe busy. The documented remedy is to wait for an instance to become
+    free and retry.
+
+    Note that the builtin open() is useless for this. It goes via the CRT's
+    _wopen() which maps the Win32 error onto errno, so CPython reports a busy
+    pipe as a bare EINVAL with winerror unset, indistinguishable from a real
+    failure. Hence CreateFile() is called directly and the handle it returns
+    wrapped up in a file object.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            h = winutil.create_file(worker_path, winutil.GENERIC_READ | winutil.GENERIC_WRITE, 0, winutil.OPEN_EXISTING, winutil.FILE_ATTRIBUTE_NORMAL)
+        except OSError as err:
+            if err.winerror != winutil.ERROR_PIPE_BUSY:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            try:
+                winutil.wait_named_pipe(worker_path, max(1, int(remaining * 1000)))
+            except OSError:
+                # No instance became free before the deadline (or the pipe
+                # went away), report the busy pipe rather than the wait failure
+                raise err from None
+        else:
+            fd = msvcrt.open_osfhandle(int(h), os.O_RDWR | os.O_BINARY | os.O_NOINHERIT)
+            h.detach()  # the fd owns the handle now, closing the file closes it
+            try:
+                return open(fd, 'r+b', buffering=0)
+            except Exception:
+                os.close(fd)
+                raise
+
+
+def make_request(worker_path: str, data: Any = None) -> Response:  # noqa: ANN401
     "Make a request and get a response from the worker"
     data = msgpack_dumps(data)
     datalen = struct.pack('!I', len(data))
     if iswindows:
-        with open(worker_path, 'r+b', buffering=0) as w:
+        with connect_to_named_pipe(worker_path) as w:
             w.write(datalen)
             w.write(data)
             w.flush()

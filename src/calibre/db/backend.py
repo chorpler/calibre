@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, cast
 
 import apsw
 
-from calibre import as_unicode, force_unicode, prints
+from calibre import as_unicode, force_unicode, prints, stop_gc
 from calibre.constants import builtin_colors_light, builtin_decorations, filesystem_encoding, iswindows, plugins, preferred_encoding
 from calibre.db import SPOOL_SIZE, FTSQueryError
 from calibre.db.annotations import annot_db_data, unicode_normalize
@@ -45,6 +45,7 @@ from calibre.db.tables import (
     RatingTable,
     SizeTable,
     UUIDTable,
+    read_books_table_columns,
 )
 from calibre.db.utils import atomic_write
 from calibre.ebooks.metadata import author_to_author_sort, title_sort
@@ -407,10 +408,10 @@ class Connection(apsw.Connection):  # {{{
     BUSY_TIMEOUT = 10000  # milliseconds
 
     def __init__(self, path):
-        from calibre.utils.localization import get_lang
+        from calibre.utils.localization import bcp47_locale_name
         from calibre_extensions.sqlite_extension import set_ui_language
 
-        set_ui_language(get_lang())
+        set_ui_language(bcp47_locale_name())
         super().__init__(path)
         plugins.load_apsw_extension(self, 'sqlite_extension')
         self.fts_dbpath = self.notes_dbpath = None
@@ -1741,8 +1742,16 @@ class DB:
         Read all data from the db into the python in-memory tables
         """
 
-        with self.conn:  # Use a single transaction, to ensure nothing modifies the db while we are reading
+        # Reading creates many long lived container objects, none of which are
+        # garbage. Their number grows with the size of the library, and with
+        # the cyclic garbage collector enabled it repeatedly traverses all of
+        # them, which is slow in larger libraries.
+        with self.conn, stop_gc():  # Use a single transaction, to ensure nothing modifies the db while we are reading
+            books_columns = tuple(t for t in self.tables.values() if isinstance(t, OneToOneTable) and t.is_books_table_column)
+            already_read = frozenset(books_columns) if read_books_table_columns(self, books_columns) else frozenset()
             for table in self.tables.values():
+                if table in already_read:
+                    continue
                 try:
                     table.read(self)
                 except Exception:

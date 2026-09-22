@@ -50,6 +50,7 @@ from calibre.gui2 import clip_border_radius, error_dialog, gprefs, pixmap_to_dat
 from calibre.gui2.dnd import DownloadDialog, dnd_get_files, dnd_get_image, dnd_get_local_image_and_pixmap, dnd_has_extension, dnd_has_image, image_extensions
 from calibre.gui2.filename_pattern_ui import Ui_Form
 from calibre.gui2.progress_indicator import ProgressIndicator as _ProgressIndicator
+from calibre.gui2.removable_history import enable_item_removal_for_combobox, remove_item_from_combobox
 from calibre.startup import connect_lambda
 from calibre.utils.config import XMLConfig, prefs
 from calibre.utils.localization import _, localize_user_manual_link
@@ -110,6 +111,11 @@ class FilenamePattern(QWidget, Ui_Form):  # {{{
         re_line_edit.returnPressed[()].connect(self.do_test)
         self.filename.returnPressed[()].connect(self.do_test)
         connect_lambda(re_line_edit.textChanged, self, lambda self, x: self.changed_signal.emit())
+        enable_item_removal_for_combobox(self.re, self.remove_history_item)
+
+    def remove_history_item(self, item):
+        if remove_item_from_combobox(self.re, item):
+            gprefs['filename_pattern_history'] = [str(self.re.itemText(i)) for i in range(self.re.count())]
 
     def initialize(self, defaults=False):
         # Get all items in the combobox. If we are resetting
@@ -408,13 +414,13 @@ class ImageView(QWidget, ImageDropMixin):
         if self.show_size_pref_name:
             self.show_size = gprefs.get(self.show_size_pref_name, default_show_size)
 
-    def dragEnterEvent(self, a0):
+    def dragEnterEvent(self, a0):  # ty: ignore[invalid-method-override]
         ImageDropMixin.dragEnterEvent(self, a0)
 
-    def dragMoveEvent(self, a0):
+    def dragMoveEvent(self, a0):  # ty: ignore[invalid-method-override]
         ImageDropMixin.dragMoveEvent(self, a0)
 
-    def dropEvent(self, a0):
+    def dropEvent(self, a0):  # ty: ignore[invalid-method-override]
         ImageDropMixin.dropEvent(self, a0)
 
     def setPixmap(self, pixmap):
@@ -519,7 +525,7 @@ class CoverView(QGraphicsView, ImageDropMixin):
             self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.set_background()
 
-    def contextMenuEvent(self, event):
+    def contextMenuEvent(self, event):  # ty: ignore[invalid-method-override]
         return ImageDropMixin.contextMenuEvent(self, event)
 
     def get_pixmap(self) -> QPixmap:
@@ -947,6 +953,11 @@ class HistoryLineEdit(QComboBox):  # {{{
         _line_edit = self.lineEdit()
         assert _line_edit is not None
         _line_edit.editingFinished.connect(self.save_history)
+        enable_item_removal_for_combobox(self, self.remove_history_item)
+
+    def remove_history_item(self, item):
+        if remove_item_from_combobox(self, item):
+            history.set(self.store_name, [str(self.itemText(i)) for i in range(self.count())])
 
     def save_history(self):
         items = []
@@ -1202,7 +1213,7 @@ class PythonHighlighter(QSyntaxHighlighter):  # {{{
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        if not self.Rules:
+        if not self.Rules:  # ty: ignore[redundant-condition]
             self.initialize_class_members()
 
     @classmethod

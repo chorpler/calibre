@@ -6,6 +6,8 @@ copy_resource: .ruff_cache
 copy_resource: .venv
 copy_resource: translations
 copy_resource: resources
+copy_resource: ~/.local/share/calibre-dbin
+copy_resource: ~/.local/lib/python3.14/site-packages/apify_fingerprint_datapoints
 env PODOFO_PREFIX /opt/podofo-1
 prepend_to_path: develop
 pre_commit: ./setup.py fmt
@@ -53,4 +55,4 @@ Before declaring a task complete, you must follow this exact verification lifecy
 1. Run the local **Build Command** to guarantee zero compilation or compilation-stage type errors.
 2. Run the local **Test Command** 
 3. If errors occur, analyze the output logs completely before writing a fix. Do not guess.
-4. Run `/setup.py check --fix && ./setup.py type_check` to ensure all files pass quality checks 
+4. Run `/setup.py check --fix --no-editor && ./setup.py type_check` to ensure all files pass quality checks 

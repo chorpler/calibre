@@ -12,13 +12,14 @@
 
 from typing import NamedTuple
 
-from qt.core import QFrame, QHBoxLayout, QIcon, QLabel, QPushButton, QScrollArea, QSize, QStackedLayout, QTextBrowser, QUrl, QVBoxLayout, QWidget, pyqtSignal
+from qt.core import QFrame, QHBoxLayout, QIcon, QLabel, QPushButton, QScrollArea, QSize, QStackedLayout, QUrl, QVBoxLayout, QWidget, pyqtSignal
 
 from calibre.ai import AICapabilities
 from calibre.ai.config import AIConfigWidget, ConfigureAI
 from calibre.customize import AIProviderPlugin
 from calibre.gui2 import error_dialog, safe_open_url
 from calibre.gui2.cyoa import data
+from calibre.gui2.cyoa.text_display import TextDisplay
 from calibre.gui2.widgets import BusyCursor
 from calibre.utils.localization import _
 
@@ -60,7 +61,7 @@ STORY_RECOMMENDATIONS = (
             RecommendedModel('deepseek/deepseek-v4-pro', 'DeepSeek V4 Pro', _('the cheapest of these, good for long games')),
             RecommendedModel('z-ai/glm-5.2', 'GLM 5.2', _('particularly good at creative writing and role-play')),
             RecommendedModel('x-ai/grok-4.3', 'Grok 4.3', _('lively narration and less likely to refuse')),
-            RecommendedModel('anthropic/claude-haiku-4.5', 'Claude Haiku 4.5', _('the most polished prose, somewhat pricier')),
+            RecommendedModel('anthropic/claude-sonnet-5', 'Claude Sonnet 5', _('the most polished prose, expensive')),
         ),
     ),
     Recommendations(
@@ -71,9 +72,9 @@ STORY_RECOMMENDATIONS = (
             ' and does not store your chats, so use it if you want a game with mature themes.'
         ),
         (
-            RecommendedModel('deepseek-v3.2', 'DeepSeek V3.2', _('very cheap and rarely refuses')),
-            RecommendedModel('deepseek-v4-pro', 'DeepSeek V4 Pro', _('better writing, a few times the cost')),
-            RecommendedModel('grok-4-3', 'Grok 4.3', _('lively narration with a huge memory')),
+            RecommendedModel('e2ee-gemma-4-26b-a4b-uncensored-p', 'Gemma Uncensored', _('rarely refuses, but often fails needing a retry')),
+            RecommendedModel('deepseek-v4-pro', 'DeepSeek V4 Pro', _('better writing, more limits, extra cost')),
+            RecommendedModel('grok-4-3', 'Grok 4.3', _('lively narration with a huge memory, but has more content limits')),
         ),
     ),
 )
@@ -106,7 +107,7 @@ IMAGE_RECOMMENDATIONS = (
 )
 
 
-class RecommendationsPanel(QTextBrowser):
+class RecommendationsPanel(TextDisplay):
     # Shows the recommended models for one AI purpose, as links that
     # configure the AI when clicked.
 

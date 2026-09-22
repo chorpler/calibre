@@ -7,105 +7,104 @@
 # scrolled into view is shown on the right, when an image AI is configured.
 # The game is auto-saved after every turn; the toolbar allows saving under a
 # name of the player's choosing, loading such saves, rewinding, editing the
-# characters and starting over in a new world, while a checkbox in the scene
-# panel turns scene images on/off.
+# world (its characters and the story memory the AI is given) and starting
+# over in a new world, while a checkbox in the scene panel turns scene
+# images on/off.
 
-import os
-from base64 import standard_b64decode
 from bisect import bisect_right
 from collections.abc import Callable
 from functools import partial
 from html import escape
 from itertools import count
 from threading import Thread
-from time import localtime, strftime
+from time import monotonic
 from typing import NamedTuple
 
 from qt.core import (
     QAction,
     QCheckBox,
-    QContextMenuEvent,
     QCursor,
     QDialog,
     QDialogButtonBox,
-    QGroupBox,
     QHBoxLayout,
     QIcon,
     QImage,
     QInputDialog,
-    QKeyEvent,
     QKeySequence,
     QLabel,
-    QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMenu,
     QMimeData,
-    QMouseEvent,
-    QPainter,
-    QPaintEvent,
     QPixmap,
-    QPlainTextEdit,
     QPoint,
     QPushButton,
-    QRectF,
-    QResizeEvent,
     QShortcut,
     QShowEvent,
-    QSize,
-    QSizeF,
+    QSpinBox,
     QSplitter,
     QStatusBar,
     Qt,
-    QTabWidget,
-    QTextBlockFormat,
-    QTextBrowser,
-    QTextCharFormat,
     QTextCursor,
-    QTextDocument,
     QTextEdit,
-    QTextOption,
     QTimer,
     QToolBar,
-    QToolButton,
     QToolTip,
     QUrl,
     QVBoxLayout,
-    QWheelEvent,
     QWidget,
     pyqtSignal,
     sip,
 )
 
-from calibre.ai import AICapabilities, ImageGenerationOptions, StructuredOutputResult
-from calibre.ai.config import AIConfigWidget, ConfigureAI
-from calibre.ai.cyoa import AIProvider, CharacterState, GameState, PlayerCharacter, deserialize_game, next_turn, rewind, scene_image_prompt, serialize_game
+from calibre.ai import ImageGenerationOptions, StructuredOutputResult
+from calibre.ai.cyoa import (
+    PROTAGONIST_ID,
+    AIProvider,
+    GameState,
+    NonPlayerCharacter,
+    PlayerCharacter,
+    QuickAction,
+    apply_character_edits,
+    deserialize_game,
+    next_turn,
+    npc_character_ids,
+    quick_action_kind_name,
+    rewind,
+    scene_image_prompt,
+    serialize_game,
+)
 from calibre.ai.utils import ContentType, response_to_html
 from calibre.customize import AIProviderPlugin
 from calibre.gui2 import config, error_dialog, qapplication_or_fail, question_dialog, safe_open_url
 from calibre.gui2.cyoa import data
-from calibre.gui2.cyoa.world import CharacterEditor, PortraitResult, generate_portrait
+from calibre.gui2.cyoa.read import ReadStoryDialog
+from calibre.gui2.cyoa.saves import LoadGameDialog, SaveGameDialog
+from calibre.gui2.cyoa.settings import ConfigureImageAIDialog, SettingsDialog
+from calibre.gui2.cyoa.story_widgets import (
+    SCENE_DIVIDER_WIDTH,
+    PromptEdit,
+    SceneImageDisplay,
+    StoryView,
+    add_scene_divider_resource,
+    insert_html_block,
+    insert_scene_divider,
+    render_chapter,
+    scene_divider_image,
+)
+from calibre.gui2.cyoa.text_display import TextDisplay
+from calibre.gui2.cyoa.world_editor import EditWorldDialog
 from calibre.gui2.image_popup import ImagePopup
-from calibre.gui2.momentum_scroll import MomentumScrollMixin
 from calibre.gui2.progress_indicator import WaitStack
 from calibre.gui2.widgets2 import Dialog
 from calibre.utils.img import image_from_data, image_to_data, resize_to_fit
 from calibre.utils.localization import _, ngettext
-from calibre.utils.resources import get_image_path
 
 QUICK_ACTION_SCHEME = 'quick-action'
 # Quick action number i is activated by pressing Ctrl+(i+1)
 MAX_QUICK_ACTION_SHORTCUTS = 9
-SAVE_NAME_ROLE = Qt.ItemDataRole.UserRole
 # Scene images are stored downscaled to fit this many pixels in either
 # dimension, keeping saved games reasonably small.
 SCENE_IMAGE_SIZE = 1280
-# The ornamental divider drawn between turns, rendered from
-# imgsrc/scene-divider.svg at twice its display width so it stays crisp on
-# high DPI screens.
-SCENE_DIVIDER_URL = 'cyoa://scene-divider'
-SCENE_DIVIDER_WIDTH = 300  # display width in the story view in device independent pixels
-INFO_DIVIDER_WIDTH = 220  # a narrower divider for the info panel, so it does not need to scroll horizontally
+INFO_DIVIDER_WIDTH = 220  # a narrower scene divider for the info panel, so it does not need to scroll horizontally
 # Symbols for the currencies AI providers commonly bill in.
 CURRENCY_SYMBOLS = {'USD': '$', 'EUR': '€', 'GBP': '£', 'JPY': '¥', 'CNY': '¥', 'INR': '₹', 'KRW': '₩'}
 
@@ -122,30 +121,20 @@ def fmt_cost(cost: float, currency: str) -> str:
     return f'{amount} {currency}'.strip()
 
 
-def insert_scene_divider(c: QTextCursor) -> None:
-    # The divider needs its own insertion helper as insertHtml() merges the
-    # fragment's first block into the current block, losing the center
-    # alignment, see insert_html_block().
-    bf = QTextBlockFormat()
-    bf.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-    bf.setTopMargin(12), bf.setBottomMargin(12)
-    c.insertBlock(bf, QTextCharFormat())
-    c.insertHtml(f'<img src="{SCENE_DIVIDER_URL}">')
+def quick_action_kind_html(action: QuickAction) -> str:
+    # The kind of approach an action takes, shown after it in a discreet
+    # italic aside. Empty for the catch-all kind, which is not worth the
+    # space, see quick_action_kind_name().
+    if kind := quick_action_kind_name(action.kind):
+        return f' <i>&mdash; {escape(kind)}</i>'
+    return ''
 
 
-def insert_html_block(c: QTextCursor, html: str) -> None:
-    # QTextCursor.insertHtml() merges the first block of the fragment into
-    # the current block, which inherits its block format. Sequential calls
-    # thus run text into the preceding heading and attach the ruler of a
-    # preceding <hr> to the following paragraph, so start every fragment in
-    # a fresh block with default formatting.
-    if c.position():
-        c.insertBlock(QTextBlockFormat(), QTextCharFormat())
-    c.insertHtml(html)
-
-
-def fmt_timestamp(ts: float) -> str:
-    return strftime('%d %b %Y, %H:%M', localtime(ts))
+def quick_action_as_text(action: QuickAction) -> str:
+    # An action and its kind as plain text, for the clipboard.
+    if kind := quick_action_kind_name(action.kind):
+        return f'{action.text} — {kind}'
+    return action.text
 
 
 class SceneImageResult(NamedTuple):
@@ -155,651 +144,11 @@ class SceneImageResult(NamedTuple):
     error_details: str = ''
 
 
-# Saved game dialogs {{{
-
-
-class ManageSavesDialog(Dialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(_('Manage saved games'), 'cyoa-manage-saves', parent, default_buttons=QDialogButtonBox.StandardButton.Close)
-
-    def setup_ui(self) -> None:
-        l = QVBoxLayout(self)
-        self.saves_label = la = QLabel(_('&Saved games:'))
-        self.saves_list = sl = QListWidget(self)
-        la.setBuddy(sl)
-        l.addWidget(la), l.addWidget(sl)
-        self.delete_button = b = QPushButton(QIcon.ic('trash.png'), _('&Delete'), self)
-        b.setToolTip('<p>' + _('Permanently delete the selected saved game'))
-        b.clicked.connect(self.delete_selected)
-        self.bb.addButton(b, QDialogButtonBox.ButtonRole.ActionRole)
-        l.addWidget(self.bb)
-        self.re_populate()
-
-    def re_populate(self) -> None:
-        self.saves_list.clear()
-        for e in data.list_games(base=data.saves_dir()):
-            turns = ngettext('{} turn', '{} turns', e.num_turns).format(e.num_turns)
-            text = f'{e.title} — {turns} — {fmt_timestamp(e.updated)}'
-            if e.game_id != e.title:
-                text += f' ({e.game_id})'
-            i = QListWidgetItem(text, self.saves_list)
-            i.setData(SAVE_NAME_ROLE, e.game_id)
-
-    def delete_selected(self) -> None:
-        item = self.saves_list.currentItem()
-        if item is None:
-            return
-        name = str(item.data(SAVE_NAME_ROLE))
-        if question_dialog(self, _('Are you sure?'), _('Permanently delete the saved game "{}"? This cannot be undone.').format(name)):
-            data.delete_game(name, base=data.saves_dir())
-            self.re_populate()
-
-
-class SaveGameDialog(Dialog):
-    def __init__(self, default_name: str, parent: QWidget | None = None) -> None:
-        self.default_name = default_name
-        super().__init__(_('Save game'), 'cyoa-save-game', parent)
-
-    def setup_ui(self) -> None:
-        l = QVBoxLayout(self)
-        self.name_label = la = QLabel(_('&Name for this save:'))
-        self.name_edit = ne = QLineEdit(self)
-        ne.setText(self.default_name)
-        ne.setToolTip('<p>' + _('The save is stored in a folder of this name, so characters not allowed in file names are replaced'))
-        la.setBuddy(ne)
-        l.addWidget(la), l.addWidget(ne)
-        self.manage_button = mb = QPushButton(QIcon.ic('config.png'), _('&Manage saves'), self)
-        mb.setToolTip('<p>' + _('Browse and delete previously saved games'))
-        mb.clicked.connect(self.manage_saves)
-        self.bb.addButton(mb, QDialogButtonBox.ButtonRole.ActionRole)
-        l.addWidget(self.bb)
-
-    def manage_saves(self) -> None:
-        ManageSavesDialog(self).exec()
-
-    @property
-    def save_name(self) -> str:
-        return data.save_name_for_title(self.name_edit.text())
-
-    def accept(self) -> None:
-        name = self.save_name
-        if os.path.exists(data.game_file(name, data.saves_dir())) and not question_dialog(
-            self, _('Save already exists'), _('A saved game named "{}" already exists. Replace it?').format(name)
-        ):
-            return
-        super().accept()
-
-
-class LoadGameDialog(Dialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(_('Load a saved game'), 'cyoa-load-game', parent)
-
-    def setup_ui(self) -> None:
-        l = QVBoxLayout(self)
-        self.saves_label = la = QLabel(_('Choose the &saved game to load:'))
-        self.saves_list = sl = QListWidget(self)
-        la.setBuddy(sl)
-        sl.itemActivated.connect(self.accept)
-        l.addWidget(la), l.addWidget(sl)
-        self.manage_button = mb = QPushButton(QIcon.ic('config.png'), _('&Manage saves'), self)
-        mb.setToolTip('<p>' + _('Browse and delete previously saved games'))
-        mb.clicked.connect(self.manage_saves)
-        self.bb.addButton(mb, QDialogButtonBox.ButtonRole.ActionRole)
-        l.addWidget(self.bb)
-        self.re_populate()
-
-    def re_populate(self) -> None:
-        self.saves_list.clear()
-        for e in data.list_games(base=data.saves_dir()):
-            turns = ngettext('{} turn', '{} turns', e.num_turns).format(e.num_turns)
-            i = QListWidgetItem(f'{e.title} — {turns} — {fmt_timestamp(e.updated)}', self.saves_list)
-            i.setData(SAVE_NAME_ROLE, e.game_id)
-        self.saves_list.setCurrentRow(0)
-
-    def manage_saves(self) -> None:
-        ManageSavesDialog(self).exec()
-        self.re_populate()
-
-    @property
-    def save_name(self) -> str:
-        item = self.saves_list.currentItem()
-        return str(item.data(SAVE_NAME_ROLE)) if item is not None else ''
-
-    def accept(self) -> None:
-        if not self.save_name:
-            error_dialog(self, _('No save selected'), _('There are no saved games to load.'), show=True)
-            return
-        super().accept()
-
-
-# }}}
-
-
-class ConfigureImageAIDialog(Dialog):
-    # Asks the player to configure the AI used to generate pictures of each
-    # scene, saving the settings the same way as the welcome screen.
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(_('Configure image AI'), 'cyoa-configure-image-ai', parent)
-
-    def setup_ui(self) -> None:
-        l = QVBoxLayout(self)
-        self.msg_label = la = QLabel(
-            '<p>' + _('No AI for image generation has been configured for the game. To show pictures of each scene, configure one below:')
-        )
-        la.setWordWrap(True)
-        l.addWidget(la)
-        # Construct the provider config widget inside the CYOA settings
-        # overlay so it displays the settings used for the game, with API
-        # keys falling through to the common AI preferences.
-        with data.cyoa_ai_settings():
-            self.image_config = ic = ConfigureAI(
-                AICapabilities.text_to_image,
-                parent=self,
-                save_hook=self.save_image_settings,
-                initial_provider_name=data.configured_provider_name('image'),
-            )
-        l.addWidget(ic)
-        l.addWidget(self.bb)
-
-    def save_image_settings(self, plugin: AIProviderPlugin, config_widget: AIConfigWidget) -> None:
-        data.save_ai_settings('image', plugin.name, config_widget.settings)
-
-    def accept(self) -> None:
-        if not self.image_config.commit():
-            return
-        super().accept()
-
-
-class SettingsDialog(Dialog):
-    # Lets the player change the AIs used to run the game mid-game: one tab
-    # for the main AI that generates the story and one for the AI that
-    # generates pictures of each scene, saving the settings the same way as
-    # the welcome screen.
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(_('Game settings'), 'cyoa-settings', parent)
-
-    def setup_ui(self) -> None:
-        l = QVBoxLayout(self)
-        self.tabs = tabs = QTabWidget(self)
-        l.addWidget(tabs)
-        # Construct the provider config widgets inside the CYOA settings
-        # overlay so they display the settings used for the game, with API
-        # keys falling through to the common AI preferences.
-        with data.cyoa_ai_settings():
-            text_tab = QWidget(self)
-            tv = QVBoxLayout(text_tab)
-            self.text_config = tc = ConfigureAI(
-                AICapabilities.text_to_text,
-                parent=text_tab,
-                save_hook=self.save_text_settings,
-                initial_provider_name=data.configured_provider_name('text'),
-            )
-            tv.addWidget(tc), tv.addStretch()
-            tabs.addTab(text_tab, QIcon.ic('ai.png'), _('&Main AI'))
-
-            image_tab = QWidget(self)
-            iv = QVBoxLayout(image_tab)
-            self.image_group = ig = QGroupBox(_('Generate &pictures of the story'), image_tab)
-            ig.setCheckable(True)
-            ig.setToolTip('<p>' + _('Uncheck this to play a text only game. You can always configure it later.'))
-            gl = QVBoxLayout(ig)
-            self.image_config = ic = ConfigureAI(
-                AICapabilities.text_to_image,
-                parent=ig,
-                save_hook=self.save_image_settings,
-                initial_provider_name=data.configured_provider_name('image'),
-            )
-            gl.addWidget(ic)
-            ig.setChecked(bool(data.configured_provider_name('image')) and not data.image_skipped())
-            iv.addWidget(ig), iv.addStretch()
-            tabs.addTab(image_tab, QIcon.ic('view-image.png'), _('&Image generation AI'))
-        l.addWidget(self.bb)
-
-    def save_text_settings(self, plugin: AIProviderPlugin, config_widget: AIConfigWidget) -> None:
-        data.save_ai_settings('text', plugin.name, config_widget.settings)
-
-    def save_image_settings(self, plugin: AIProviderPlugin, config_widget: AIConfigWidget) -> None:
-        data.save_ai_settings('image', plugin.name, config_widget.settings)
-
-    def accept(self) -> None:
-        if not self.text_config.commit():
-            self.tabs.setCurrentIndex(0)
-            return
-        if self.image_group.isChecked():
-            if not self.image_config.commit():
-                self.tabs.setCurrentIndex(1)
-                return
-            data.mark_image_skipped(False)
-        else:
-            data.mark_image_skipped(True)
-        super().accept()
-
-
-def played_character_index(state: GameState) -> int:
-    # The index in state.world.characters of the character the player plays,
-    # -1 when it cannot be found.
-    chars = state.world.characters
-    try:
-        return chars.index(state.character)
-    except ValueError:
-        # the played character was edited, fall back to matching by name
-        return next((i for i, c in enumerate(chars) if c.name == state.character.name), -1)
-
-
-class CharactersDialog(Dialog):
-    # Lists the characters of the story: the character the player plays,
-    # followed by the named characters the AI introduced during play, taken
-    # from the story summary. The player can edit their descriptions,
-    # backstories and, for the story characters, relationships, mid-game and
-    # (re-)generate their portraits. The edits are applied to the game state
-    # by the caller after the dialog is accepted, via the player_character,
-    # npcs, portraits and npc_portraits attributes.
-
-    portrait_result_received = pyqtSignal(int, int, object)  # (call_number, list row, PortraitResult)
-
-    def __init__(self, state: GameState, npc_portraits: dict[str, dict[str, str]] | None = None, parent: QWidget | None = None) -> None:
-        self.player_character = state.character
-        self.played_idx = played_character_index(state)
-        # The characters the AI introduced during play, i.e. every character
-        # in the story summary other than the player, with their original
-        # names so that renames can be followed in the stored summaries and
-        # portraits.
-        pname = state.character.name.strip().casefold()
-        self.npcs: list[CharacterState] = [c for c in state.current_summary.characters if c.name.strip().casefold() != pname]
-        self.npc_original_names = [c.name for c in self.npcs]
-        # Portraits in stored form ({'mime': ..., 'data': base64} or None).
-        # The playable characters' portraits come from the saved world of the
-        # same title, aligned with world.characters, where the world creation
-        # flow keeps them. The NPC portraits, keyed by character name, belong
-        # to this game alone and are supplied by the caller, who stores them
-        # in the game file so games in the same world do not share them.
-        idx = data.saved_world_index_with_title(state.world.title)
-        entry = data.saved_worlds()[idx] if idx > -1 else {}
-        self.portraits: list[dict[str, str] | None] = data.portraits_from_saved(entry, len(state.world.characters))
-        self.npc_portraits: dict[str, dict[str, str]] = dict(npc_portraits or {})
-        self.art_style = state.art_style
-        self.world_description = state.world.world_description
-        self.images_enabled = data.images_enabled()
-        self.current_idx = -1
-        # Portrait generation runs one at a time on a background thread:
-        # portrait_call identifies the current generation (results from
-        # superseded calls are discarded) and portrait_idx is the list row of
-        # the character whose portrait is being generated.
-        self.portrait_counter = count(start=1)
-        self.portrait_call = -1
-        self.portrait_idx = -1
-        super().__init__(_('Characters'), 'cyoa-characters', parent)
-
-    def sizeHint(self) -> QSize:
-        return QSize(900, 600)
-
-    def setup_ui(self) -> None:
-        l = QVBoxLayout(self)
-        self.msg_label = la = QLabel(
-            _(
-                'Edit the characters of the story as needed, changes take effect from the next turn.'
-                ' Note that editing a character that has already interacted with the world for a while'
-                ' is not recommended, as the changes can contradict the story so far.'
-            )
-        )
-        la.setWordWrap(True)
-        l.addWidget(la)
-        h = QHBoxLayout()
-        self.char_list = cw = QListWidget(self)
-        for row in range(1 + len(self.npcs)):
-            cw.addItem(self.display_name(row))
-        cw.currentRowChanged.connect(self.on_character_changed)
-        h.addWidget(cw, stretch=1)
-        self.character_editor = ce = CharacterEditor(self)
-        ce.set_portrait_ui_visible(self.images_enabled)
-        ce.portrait_refresh_requested.connect(self.regenerate_current_portrait)
-        h.addWidget(ce, stretch=3)
-        l.addLayout(h)
-        self.status_label = sl = QLabel('')
-        sl.setWordWrap(True)
-        l.addWidget(sl)
-        l.addWidget(self.bb)
-        self.portrait_result_received.connect(self.on_portrait_result, type=Qt.ConnectionType.QueuedConnection)
-        cw.setCurrentRow(0)
-
-    def name_for_row(self, row: int) -> str:
-        if row == 0:
-            return self.player_character.name
-        return self.npcs[row - 1].name if 0 < row <= len(self.npcs) else ''
-
-    def display_name(self, row: int) -> str:
-        return _('{} (you)').format(self.name_for_row(row)) if row == 0 else self.name_for_row(row)
-
-    def commit_character_edits(self) -> None:
-        row = self.current_idx
-        if row == 0:
-            self.player_character = self.character_editor.character
-        elif 0 < row <= len(self.npcs):
-            self.npcs[row - 1] = self.character_editor.character_state
-        else:
-            return
-        item = self.char_list.item(row)
-        if item is not None and self.name_for_row(row):
-            item.setText(self.display_name(row))
-
-    def on_character_changed(self, row: int) -> None:
-        if row == self.current_idx:
-            return
-        self.commit_character_edits()
-        self.current_idx = row
-        if row == 0:
-            self.character_editor.load(self.player_character)
-        elif 0 < row <= len(self.npcs):
-            self.character_editor.load_state(self.npcs[row - 1])
-        self.character_editor.set_relationships_visible(row > 0)
-        self.update_portrait_display()
-        self.maybe_generate_portrait()
-
-    def row_can_have_portrait(self, row: int) -> bool:
-        # The player character's portrait is stored aligned with
-        # world.characters, so it cannot be stored when the played character
-        # is not found there.
-        return (row == 0 and self.played_idx > -1) or 0 < row <= len(self.npcs)
-
-    def portrait_for_row(self, row: int) -> dict[str, str] | None:
-        if row == 0:
-            return self.portraits[self.played_idx] if -1 < self.played_idx < len(self.portraits) else None
-        if 0 < row <= len(self.npcs):
-            return self.npc_portraits.get(self.npc_original_names[row - 1])
-        return None
-
-    def store_portrait(self, row: int, portrait: dict[str, str] | None) -> None:
-        if portrait is None:
-            return
-        if row == 0:
-            if -1 < self.played_idx < len(self.portraits):
-                self.portraits[self.played_idx] = portrait
-        elif 0 < row <= len(self.npcs):
-            self.npc_portraits[self.npc_original_names[row - 1]] = portrait
-
-    def character_for_row(self, row: int) -> PlayerCharacter:
-        if row == 0:
-            return self.player_character
-        c = self.npcs[row - 1]
-        return PlayerCharacter(name=c.name, description=c.description, backstory=c.backstory)
-
-    def update_portrait_display(self) -> None:
-        if not self.images_enabled:
-            return
-        row = self.current_idx
-        if row > -1 and row == self.portrait_idx:
-            self.character_editor.show_portrait_busy(True)
-            return
-        self.character_editor.show_portrait_busy(False)
-        p = self.portrait_for_row(row)
-        self.character_editor.set_portrait(standard_b64decode(p['data']) if p else None)
-
-    def maybe_generate_portrait(self) -> None:
-        # Portraits of characters introduced during play are generated on
-        # demand, the first time their page is opened in this dialog.
-        row = self.current_idx
-        if self.images_enabled and self.portrait_idx == -1 and self.row_can_have_portrait(row) and self.portrait_for_row(row) is None:
-            self.start_portrait_generation(row)
-
-    def regenerate_current_portrait(self) -> None:
-        self.commit_character_edits()
-        if self.portrait_idx > -1:
-            self.status_label.setText(_('A portrait is already being generated, please wait.'))
-            return
-        self.start_portrait_generation(self.current_idx)
-
-    def start_portrait_generation(self, row: int) -> None:
-        if not self.images_enabled or not self.row_can_have_portrait(row):
-            return
-        plugin = data.plugin_for('image')
-        if plugin is None:
-            return
-        self.status_label.setText('')
-        self.portrait_call = next(self.portrait_counter)
-        self.portrait_idx = row
-        Thread(
-            name='CYOACharacterPortrait', daemon=True, target=self.do_generate_portrait, args=(self.character_for_row(row), row, self.portrait_call, plugin)
-        ).start()
-        self.update_portrait_display()
-
-    def do_generate_portrait(self, character: PlayerCharacter, row: int, call_number: int, plugin: AIProviderPlugin) -> None:
-        try:
-            pr = generate_portrait(character, self.art_style, self.world_description, plugin)
-            if sip.isdeleted(self):
-                return
-            self.portrait_result_received.emit(call_number, row, pr)
-        except RuntimeError:
-            pass  # when self gets deleted between call to sip.isdeleted and next statement
-
-    def on_portrait_result(self, call_number: int, row: int, pr: PortraitResult) -> None:
-        if call_number != self.portrait_call:
-            return  # a stale result from a superseded or cancelled call
-        self.portrait_call = -1
-        self.portrait_idx = -1
-        if pr.error:
-            self.status_label.setText(_('Failed to generate a portrait for {0}: {1}').format(self.name_for_row(row), pr.error))
-            self.status_label.setToolTip(pr.error_details)
-        else:
-            self.store_portrait(row, pr.portrait)
-        self.update_portrait_display()
-        # the player may have switched to another character without a
-        # portrait while this one was being generated
-        self.maybe_generate_portrait()
-
-    def accept(self) -> None:
-        self.commit_character_edits()
-        if not self.player_character.name or any(not c.name for c in self.npcs):
-            error_dialog(self, _('No character name'), _('Every character must have a name.'), show=True)
-            return
-        # Re-key the NPC portraits by the possibly renamed character names,
-        # preserving portraits of characters not shown in this dialog, e.g.
-        # ones no longer in the current summary after rewinding the game.
-        shown = set(self.npc_original_names)
-        portraits = {name: p for name, p in self.npc_portraits.items() if name not in shown}
-        for c, original_name in zip(self.npcs, self.npc_original_names):
-            if p := self.npc_portraits.get(original_name):
-                portraits[c.name] = p
-        self.npc_portraits = portraits
-        super().accept()
-
-
-class PromptEdit(QPlainTextEdit):
-    # The box the player types their next action into. Ctrl+Enter submits.
-    submit_requested = pyqtSignal()
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setMaximumHeight(self.fontMetrics().lineSpacing() * 4)
-
-    def keyPressEvent(self, e: QKeyEvent | None) -> None:
-        if e is not None and e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and e.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            e.accept()
-            self.submit_requested.emit()
-            return
-        super().keyPressEvent(e)
-
-
-class SceneImageDisplay(QWidget):
-    # Shows an image scaled to fit while preserving aspect ratio, or a
-    # placeholder message when there is no image. Double clicking the image
-    # opens it in a popup and right clicking it shows a context menu, both
-    # handled by the game widget. A discreet refresh button in the bottom
-    # right corner of the image and, when there is no image because
-    # generation failed or was never attempted for this scene, a retry or
-    # generate button shown in place of the placeholder text all ask the
-    # game widget to (re-)generate the picture via refresh_requested.
-    popup_requested = pyqtSignal()
-    context_menu_requested = pyqtSignal(object)  # the global position of the click as a QPoint
-    refresh_requested = pyqtSignal()
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.image_data = b''
-        self.placeholder = ''
-        self.failed = False
-        self.busy = False
-        self.can_generate = False
-        self.pixmap = QPixmap()
-        # Request a height matching the image so widgets placed below in a
-        # layout sit directly under the image rather than under empty space.
-        sp = self.sizePolicy()
-        sp.setHeightForWidth(True)
-        self.setSizePolicy(sp)
-        self.refresh_button = rb = QToolButton(self)
-        rb.setIcon(QIcon.ic('view-refresh.png'))
-        rb.setAutoRaise(True)
-        rb.setCursor(Qt.CursorShape.PointingHandCursor)
-        rb.setToolTip('<p>' + _('Re-generate the picture of this scene'))
-        rb.clicked.connect(self.refresh_requested)
-        rb.hide()
-        # Shown in place of the placeholder text when there is no picture of
-        # this scene, offering to generate one, or to retry when generation
-        # failed. Label and button texts are set in set_image().
-        self.retry_panel = rp = QWidget(self)
-        rl = QVBoxLayout(rp)
-        self.retry_label = rla = QLabel(rp)
-        rla.setWordWrap(True)
-        rla.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.retry_button = tb = QPushButton(QIcon.ic('view-refresh.png'), '', rp)
-        tb.clicked.connect(self.refresh_requested)
-        rl.addStretch()
-        rl.addWidget(rla)
-        rl.addWidget(tb, alignment=Qt.AlignmentFlag.AlignHCenter)
-        rl.addStretch()
-        rp.hide()
-
-    def hasHeightForWidth(self) -> bool:
-        return True
-
-    def heightForWidth(self, a0: int) -> int:
-        if self.pixmap.isNull():
-            return (a0 * 3) // 4  # the aspect ratio scene images are generated at
-        sz = self.pixmap.deviceIndependentSize()
-        return round(a0 * sz.height() / sz.width())
-
-    def mouseDoubleClickEvent(self, a0: QMouseEvent | None) -> None:
-        if a0 is not None and a0.button() == Qt.MouseButton.LeftButton and not self.pixmap.isNull():
-            a0.accept()
-            self.popup_requested.emit()
-            return
-        super().mouseDoubleClickEvent(a0)
-
-    def contextMenuEvent(self, a0: QContextMenuEvent | None) -> None:
-        if a0 is not None and not self.pixmap.isNull():
-            a0.accept()
-            self.context_menu_requested.emit(a0.globalPos())
-
-    def set_image(
-        self,
-        image_data: bytes | None,
-        placeholder: str,
-        failed: bool = False,
-        busy: bool = False,
-        can_generate: bool = False,
-    ) -> None:
-        image_data = image_data or b''
-        if (
-            image_data == self.image_data
-            and placeholder == self.placeholder
-            and failed == self.failed
-            and busy == self.busy
-            and can_generate == self.can_generate
-        ):
-            return
-        self.image_data, self.placeholder, self.failed, self.busy = image_data, placeholder, failed, busy
-        self.can_generate = can_generate
-        if failed:
-            self.retry_label.setText(
-                _(
-                    'Failed to generate a picture of this scene. If retrying does not help,'
-                    ' try changing the image generation AI model via the Settings button in the toolbar.'
-                )
-            )
-            self.retry_button.setText(_('&Retry image generation'))
-        else:
-            self.retry_label.setText(_('No picture of this scene is available'))
-            self.retry_button.setText(_('&Generate scene image'))
-        pm = QPixmap()
-        if image_data:
-            pm.loadFromData(image_data)
-            pm.setDevicePixelRatio(self.devicePixelRatioF())
-        self.pixmap = pm
-        self.position_overlays()
-        self.updateGeometry()  # the height for width depends on the image aspect ratio
-        self.update()
-
-    def sizeHint(self) -> QSize:
-        return QSize(300, 400)
-
-    def image_rect(self) -> QRectF:
-        # Where the image is drawn: scaled to fit, centered horizontally and
-        # aligned with the panel top.
-        sz = QSizeF(self.pixmap.deviceIndependentSize())
-        sz.scale(QSizeF(self.size()), Qt.AspectRatioMode.KeepAspectRatio)
-        r = QRectF(0, 0, sz.width(), sz.height())
-        r.moveCenter(QRectF(self.rect()).center())
-        r.moveTop(0)
-        return r
-
-    def position_overlays(self) -> None:
-        self.retry_panel.setGeometry(self.rect())
-        self.retry_panel.setVisible((self.failed or self.can_generate) and self.pixmap.isNull() and not self.busy)
-        if self.pixmap.isNull() or self.busy:
-            self.refresh_button.hide()
-            return
-        margin = 4
-        r = self.image_rect()
-        s = self.refresh_button.sizeHint()
-        self.refresh_button.move(round(r.right()) - s.width() - margin, round(r.bottom()) - s.height() - margin)
-        self.refresh_button.show()
-        self.refresh_button.raise_()
-
-    def resizeEvent(self, a0: QResizeEvent | None) -> None:
-        super().resizeEvent(a0)
-        self.position_overlays()  # the image rect the refresh button sits in depends on the widget size
-
-    def paintEvent(self, a0: QPaintEvent | None) -> None:
-        p = QPainter(self)
-        if self.pixmap.isNull():
-            to = QTextOption(Qt.AlignmentFlag.AlignCenter)
-            to.setWrapMode(QTextOption.WrapMode.WordWrap)
-            p.drawText(QRectF(self.rect()), self.placeholder, to)
-        else:
-            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            p.drawPixmap(self.image_rect(), self.pixmap, QRectF(self.pixmap.rect()))
-        p.end()
-
-
-class StoryView(MomentumScrollMixin, QTextBrowser):
-    # The chapter text display: a text browser with momentum scrolling and
-    # an extra context menu action to copy the current turn.
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.copy_turn_action: QAction | None = None
-
-    def wheelEvent(self, a0: QWheelEvent | None) -> None:
-        MomentumScrollMixin.wheelEvent(self, a0)
-
-    def contextMenuEvent(self, e: QContextMenuEvent | None) -> None:
-        if e is None:
-            return
-        m = self.createStandardContextMenu(e.pos())
-        if m is None:
-            return
-        if self.copy_turn_action is not None:
-            m.addSeparator()
-            m.addAction(self.copy_turn_action)
-        m.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        m.exec(e.globalPos())
-
-
 class GameWidget(QWidget):
     game_abandoned = pyqtSignal()
 
     turn_result_received = pyqtSignal(int, object, object)  # (call_number, GameState the turn was played on, StructuredOutputResult)
+    turn_narrative_received = pyqtSignal(int, str)  # (call_number, the next fragment of the prose of the turn being written)
     image_result_received = pyqtSignal(int, int, object)  # (call_number, turn number, SceneImageResult)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -810,9 +159,9 @@ class GameWidget(QWidget):
         # One based numbers of the turns whose scene image generation failed,
         # shown a retry button in the scene panel. Not saved with the game.
         self.failed_image_turns: set[int] = set()
-        # Portraits of the characters the AI introduced during this game,
-        # keyed by character name, saved as part of the game.
-        self.npc_portraits: dict[str, dict[str, str]] = {}
+        # Portraits of the characters of this game, keyed by the stable id of
+        # the character they depict, saved as part of the game.
+        self.portraits: dict[str, dict[str, str]] = {}
         self.images_enabled = False
         self.session_cost = 0.0
         self.last_save_name = ''
@@ -825,11 +174,58 @@ class GameWidget(QWidget):
         self.turn_counter = count(start=1)
         self.turn_call = -1
         # What the in-flight turn generation was asked for, so that it can be
-        # abandoned and asked for again by the retry button on the spinner.
+        # retried if the turn times out or fails.
         self.turn_request: tuple[str, bool] | None = None
+        # Set while the dialog asking what to do about a turn that has taken
+        # too long is open. The turn is still in flight, so a result that
+        # arrives during that dialog's nested event loop is stashed in
+        # late_turn_result and applied when the dialog closes, rather than
+        # being applied behind the dialog or, worse, thrown away.
+        self.turn_timed_out = False
+        self.turn_timeout_dialog: QDialog | None = None
+        self.late_turn_result: tuple[int, GameState, StructuredOutputResult] | None = None
+        self.turn_timer = QTimer(self)
+        self.turn_timer.setSingleShot(True)
+        self.turn_timer.timeout.connect(self.on_turn_timeout)
+        self._thinking_start: float = 0.0
+        self._thinking_ticker = QTimer(self)
+        self._thinking_ticker.setInterval(1000)
+        self._thinking_ticker.timeout.connect(self._update_thinking_elapsed)
+        # The prose of the turn being generated, as far as the AI has written
+        # it, shown in the story view while the rest of the turn is generated,
+        # see render_story(). The fragments arrive many times a second, so
+        # the display is refreshed by a timer rather than for every fragment.
+        self.streamed_narrative = ''
+        # Where in the story document the prose of the turn being generated is
+        # rendered, -1 when no turn is being generated.
+        self.streaming_block_start = -1
+        # Where in the story document the turn being generated starts, that is
+        # the position render_chapter() will report for it once it has been
+        # played, -1 when no turn is being generated. Used as the anchor that
+        # keeps the story still when the finished turn replaces the streamed
+        # prose, see on_turn_result().
+        self.streaming_turn_start = -1
+        # The story view is scrolled once per turn, when the first words of
+        # the prose arrive: the start of the turn is moved to the top of the
+        # view and the prose then fills the blank space below it as it is
+        # written, see pin_streaming_turn(). This is the scroll position it
+        # was pinned at, -1 until that has been done.
+        self.streaming_pin_value = -1
+        self.narrative_render_timer = t = QTimer(self)
+        t.setSingleShot(True)
+        t.setInterval(100)
+        t.timeout.connect(self.render_streamed_narrative)
         self.image_counter = count(start=1)
         self.image_call = -1
         self.image_turn = -1
+        # Scrolling the story view emits valueChanged continuously, in
+        # particular under momentum scrolling, and working out which turn is
+        # on screen needs layout queries, so the scene panel is only
+        # refreshed once the scrolling has paused, see on_story_scrolled().
+        self.scroll_settle_timer = t = QTimer(self)
+        t.setSingleShot(True)
+        t.setInterval(50)
+        t.timeout.connect(self.update_scene_panel)
         # (document position, one based turn number) of every turn shown in
         # the story view, used to map the scroll position to a turn.
         self.turn_positions: list[tuple[int, int]] = []
@@ -858,8 +254,12 @@ class GameWidget(QWidget):
             _('Go back to an earlier turn, discarding all turns after it. Press {} to go back one turn').format('Alt+Left'),
             self.back_to_turn,
         )
-        self.characters_action = toolbar_action(
-            'user_profile.png', _('Characters'), _('View and edit the characters of the story and their portraits'), self.edit_characters
+        self.read_action = toolbar_action('view.png', _('Read'), _('Read the story so far, chapter by chapter, as a book'), self.read_story)
+        self.world_action = toolbar_action(
+            'metadata.png',
+            _('Edit world'),
+            _('View and edit the characters of the story and their portraits, and the story memory the AI continues the story from'),
+            self.edit_world,
         )
         self.settings_action = toolbar_action(
             'config.png', _('Settings'), _('Change the AIs used to generate the story and the pictures of each scene'), self.change_settings
@@ -878,9 +278,6 @@ class GameWidget(QWidget):
         ll.setContentsMargins(0, 0, 0, 0)
         self.story_view = sv = StoryView(left)
         sv.setOpenLinks(False)
-        doc = sv.document()
-        if doc is not None:  # quick action links are colored but not underlined
-            doc.setDefaultStyleSheet('a { text-decoration: none }')
         sv.anchorClicked.connect(self.on_link_clicked)
         sv.highlighted.connect(self.on_link_hovered)
         vsb = sv.verticalScrollBar()
@@ -897,17 +294,19 @@ class GameWidget(QWidget):
         il.addWidget(pe)
         h = QHBoxLayout()
         self.action_button = ab = QPushButton(QIcon.ic('ok.png'), _('Take &action'), input_panel)
-        ab.setToolTip('<p>' + _('Submit your action to the AI game master. You can also press {} in the box above').format('Ctrl+Enter'))
+        ab.setToolTip('<p>' + _('Submit your action to the AI. You can also press {} in the box above').format('Ctrl+Enter'))
         ab.clicked.connect(self.take_action)
         h.addWidget(ab)
-        self.interesting_button = ib = QPushButton(QIcon.ic('ai.png'), _('Something &interesting happens'), input_panel)
+        self.interesting_button = ib = QPushButton(QIcon.ic('random.png'), _('Something &interesting happens'), input_panel)
         ib.setToolTip('<p>' + _('Instead of taking an action yourself, have the AI make something unexpected and interesting happen next'))
         ib.clicked.connect(self.interesting_event)
         h.addWidget(ib), h.addStretch()
         il.addLayout(h)
-        self.input_stack = ws = WaitStack(_('Thinking, please wait…'), after=input_panel, parent=left, size=64)
-        ws.enable_retry('<p>' + _('Stop waiting for this turn and ask the AI game master for it again'))
-        ws.retry_requested.connect(self.retry_turn)
+        self.input_stack = ws = WaitStack(_('Thinking…'), after=input_panel, parent=left, size=64)
+        # A discreet Stop button in the corner of the overlay, for abandoning
+        # a turn that is taking too long or was asked for by mistake.
+        ws.enable_corner_button('window-close.png', '<p>' + _('Stop waiting for the AI to write this turn. The AI provider may still charge for it.'))
+        ws.corner_button_clicked.connect(self.stop_turn)
         ws.stop()
         ll.addWidget(ws)
         sp.addWidget(left)
@@ -922,7 +321,7 @@ class GameWidget(QWidget):
         rl.addWidget(si)
         self.scene_filler = filler = QWidget(right)  # absorbs the leftover space under the scene image when images are shown
         rl.addWidget(filler, stretch=10)
-        self.info_view = iv = QTextBrowser(right)  # shown instead of the image when the image AI is disabled
+        self.info_view = iv = TextDisplay(right)  # shown instead of the image when the image AI is disabled
         rl.addWidget(iv, stretch=10)
         self.images_check = ic = QCheckBox(_('&Generate images'), right)
         ic.setToolTip('<p>' + _('Show AI generated pictures of each scene. When turned off, no images are generated for new turns'))
@@ -943,15 +342,8 @@ class GameWidget(QWidget):
         # screen. It must be re-registered on the story document after every
         # clear(), as that discards document resources.
         dpr = self.devicePixelRatioF()
-        src = QImage(get_image_path('scene-divider.png'))
-
-        def scaled_divider(width: int) -> QImage:
-            img = src.scaledToWidth(round(width * dpr), Qt.TransformationMode.SmoothTransformation)
-            img.setDevicePixelRatio(dpr)
-            return img
-
-        self.scene_divider = scaled_divider(SCENE_DIVIDER_WIDTH)
-        self.add_scene_divider_resource(iv, scaled_divider(INFO_DIVIDER_WIDTH))
+        self.scene_divider = scene_divider_image(SCENE_DIVIDER_WIDTH, dpr)
+        add_scene_divider_resource(iv, scene_divider_image(INFO_DIVIDER_WIDTH, dpr))
 
         self.image_popup = ImagePopup(self)
         self.copy_image_action = a = QAction(QIcon.ic('edit-copy.png'), _('&Copy image to clipboard'), self)
@@ -963,6 +355,9 @@ class GameWidget(QWidget):
         a.triggered.connect(self.show_scene_image_popup)
         self.edit_image_prompt_action = a = QAction(QIcon.ic('edit_input.png'), _('&Edit prompt and regenerate image'), self)
         a.triggered.connect(self.edit_scene_image_prompt)
+        self.copy_turn_text_only_action = a = QAction(QIcon.ic('edit-copy.png'), _('Copy current turn &text to clipboard'), self)
+        a.triggered.connect(self.copy_current_turn_text_only)
+        sv.copy_turn_text_only_action = a
         self.copy_turn_action = a = QAction(QIcon.ic('edit-copy.png'), _('Copy current &turn to clipboard'), self)
         a.setShortcut(QKeySequence('Ctrl+Shift+C', QKeySequence.SequenceFormat.PortableText))
         a.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -985,6 +380,7 @@ class GameWidget(QWidget):
         self.setFocusProxy(self.prompt_edit)
 
         self.turn_result_received.connect(self.on_turn_result, type=Qt.ConnectionType.QueuedConnection)
+        self.turn_narrative_received.connect(self.on_turn_narrative, type=Qt.ConnectionType.QueuedConnection)
         self.image_result_received.connect(self.on_image_result, type=Qt.ConnectionType.QueuedConnection)
 
     def showEvent(self, a0: QShowEvent | None) -> None:
@@ -1014,16 +410,24 @@ class GameWidget(QWidget):
             data.save_game_splitter_state(bytes(self.splitter.saveState()))
 
     def load_game(
-        self, game_id: str, state: GameState, images: dict[int, data.SceneImage] | None = None, npc_portraits: dict[str, dict[str, str]] | None = None
+        self,
+        game_id: str,
+        state: GameState,
+        images: dict[int, data.SceneImage] | None = None,
+        portraits: dict[str, dict[str, str]] | None = None,
+        save_name: str = '',
     ) -> None:
+        # save_name is the name this game was last saved under, if any, so
+        # that saving it again defaults to that name rather than the title of
+        # the world it is set in.
         self.game_id = game_id
         self.state = state
         self.images = dict(images or {})
         self.failed_image_turns = set()
-        self.npc_portraits = dict(npc_portraits or {})
+        self.portraits = dict(portraits or {})
         self.images_enabled = data.images_enabled()
         self.session_cost = 0.0
-        self.last_save_name = data.save_name_for_title(state.world.title)
+        self.last_save_name = save_name or data.save_name_for_title(state.world.title)
         self.cancel_pending_ai_calls()
         self.images_check.setChecked(self.images_enabled)
         self.apply_images_enabled()
@@ -1035,18 +439,79 @@ class GameWidget(QWidget):
         elif self.images_enabled and len(state.turns) not in self.images:
             self.request_image(len(state.turns))
 
+    def _update_thinking_elapsed(self) -> None:
+        secs = int(monotonic() - self._thinking_start)
+        if secs < 60:
+            human = ngettext('{} second', '{} seconds', secs).format(secs)
+        else:
+            mins, s = divmod(secs, 60)
+            human = _('{m}m {s}s').format(m=mins, s=s)
+        # Once prose starts arriving the AI is no longer thinking but writing
+        self.input_stack.msg = (_('Writing… {}') if self.streamed_narrative else _('Thinking… {}')).format(human)
+
+    def _stop_thinking(self) -> None:
+        self._thinking_ticker.stop()
+        self.input_stack.stop()
+
+    def abandon_pending_turn(self) -> None:
+        # Stop waiting for the turn being generated. It keeps running, as
+        # there is no way to abort a request to an AI provider, but its result
+        # is discarded when it arrives as its call number no longer matches.
+        self.turn_call = -1
+        self.turn_request = None
+        self.turn_timed_out = False
+        self.late_turn_result = None
+        self.turn_timer.stop()
+        self._stop_thinking()
+        self.discard_pending_turn_display()
+
+    def discard_pending_turn_display(self) -> None:
+        # Remove the prose of a turn that was being written from the story
+        # view, once the turn has been given up on or has failed. Must be
+        # called after turn_call has been reset, so that render_story() does
+        # not put the prose right back.
+        self.streamed_narrative = ''
+        self.narrative_render_timer.stop()
+        self.streaming_pin_value = -1
+        if self.streaming_block_start > -1:
+            self.render_story()
+            if self.state is not None and self.state.turns:
+                self.scroll_to_turn(len(self.state.turns))
+
     def cancel_pending_ai_calls(self) -> None:
         # In-flight generations keep running but their results are discarded
         # as their call numbers no longer match.
-        self.turn_call = -1
-        self.turn_request = None
+        self.abandon_pending_turn()
         self.image_call = -1
         self.image_turn = -1
-        self.input_stack.stop()
 
-    def refresh_ui(self) -> None:
+    def stop_turn(self) -> None:
+        # The Stop button of the "Thinking…" overlay. The game is left exactly
+        # as it was before the turn was asked for, so the player can edit
+        # their action and try again, or do something else entirely.
+        if self.turn_call < 0:
+            return
+        self.abandon_pending_turn()
+        self.status_bar.showMessage(_('Stopped waiting for this turn. The AI provider may still charge for it.'), 5000)
+        self.prompt_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def refresh_text_display(self) -> None:
+        # The colors of the links of the story are baked into the document
+        # when the HTML is parsed, so the story and the info panel have to be
+        # rendered again for a change to the text display settings to become
+        # fully visible, without losing the place the player is reading at.
+        tn = self.visible_turn_number()
         self.render_story()
-        if self.state is not None and self.state.turns:
+        self.info_view.setProperty('cyoa-html', None)
+        self.update_scene_panel()
+        if tn:
+            self.scroll_to_turn(tn)
+
+    def refresh_ui(self, scroll_to_last: bool = True) -> None:
+        self.render_story()
+        # There is nothing to read until the opening turn has been written
+        self.read_action.setEnabled(self.state is not None and bool(self.state.turns))
+        if scroll_to_last and self.state is not None and self.state.turns:
             self.scroll_to_turn(len(self.state.turns))
         self.update_window_title()
         self.update_status()
@@ -1054,15 +519,11 @@ class GameWidget(QWidget):
 
     # Story display {{{
 
-    def add_scene_divider_resource(self, view: QTextBrowser, divider: QImage | None = None) -> None:
-        doc = view.document()
-        if doc is not None:
-            doc.addResource(int(QTextDocument.ResourceType.ImageResource), QUrl(SCENE_DIVIDER_URL), divider if divider is not None else self.scene_divider)
-
     def render_story(self) -> None:
         sv = self.story_view
         sv.clear()
-        self.add_scene_divider_resource(sv)  # clear() discards document resources
+        add_scene_divider_resource(sv, self.scene_divider)  # clear() discards document resources
+        sv.apply_max_line_width()  # as does the margin limiting the line length
         self.turn_positions = []
         state = self.state
         if state is None:
@@ -1072,42 +533,97 @@ class GameWidget(QWidget):
         if not state.turns:
             insert_html_block(c, f'<h2>{escape(state.world.title)}</h2>')
             insert_html_block(c, response_to_html(state.world.world_description, ContentType.markdown))
+        else:
+            self.turn_positions = render_chapter(c, state, state.current_chapter)
+        if self.turn_call > -1 and self.turn_request is not None:
+            # A turn is being generated: show the action the player took and
+            # the prose the AI has written so far in place of the quick
+            # actions, which are for a turn that has already been played.
+            insert_scene_divider(c)
+            # The turn starts after the divider, as it does in render_chapter()
+            self.streaming_turn_start = c.position()
+            player_input = self.turn_request[0]  # empty for the opening turn and for "something interesting happens"
+            if player_input:
+                insert_html_block(c, f'<p><i>➤ {escape(player_input)}</i></p>')
+            self.streaming_block_start = c.position()
+            if self.streamed_narrative:
+                insert_html_block(c, response_to_html(self.streamed_narrative, ContentType.markdown))
             return
-        insert_html_block(c, f'<h2>{escape(state.chapter_titles[state.current_chapter])}</h2>')
-        for i, t in enumerate(state.turns):
-            if t.chapter != state.current_chapter:
-                continue
-            if self.turn_positions:
-                insert_scene_divider(c)
-            self.turn_positions.append((c.position(), i + 1))
-            if t.player_input:
-                insert_html_block(c, f'<p><i>➤ {escape(t.player_input)}</i></p>')
-            insert_html_block(c, response_to_html(t.turn.narrative, ContentType.markdown))
+        self.streaming_block_start = self.streaming_turn_start = -1
+        if not state.turns:
+            return
         insert_scene_divider(c)
         last = state.turns[-1].turn
         if last.quick_actions:
             # each action in its own paragraph with a top margin, giving
-            # enough space between the links to click them comfortably
+            # enough space between the links to click them comfortably, with
+            # the kind of approach it takes after it, so that the three read
+            # as the three different choices they are meant to be
             items = ''.join(
-                f'<p style="margin-top: 8px; margin-left: 16px"><a href="{QUICK_ACTION_SCHEME}:{i}">{escape(a)}</a></p>'
+                f'<p style="margin-top: 8px; margin-left: 16px"><a href="{QUICK_ACTION_SCHEME}:{i}">{escape(a.text)}</a>{quick_action_kind_html(a)}</p>'
                 for i, a in enumerate(last.quick_actions)
             )
             insert_html_block(c, f'<h4>{_("Quick actions")}</h4>' + items)
 
-    def quick_action(self, action_number: int) -> str:
-        # The text of the zero based action_number quick action of the last
-        # turn, empty when there is no such action.
+    def render_streamed_narrative(self) -> None:
+        # Replace the prose of the turn being generated in the story view
+        # with what the AI has written so far. The prose is Markdown, which
+        # cannot be rendered a fragment at a time, so the whole passage is
+        # rendered again, which is cheap as it is at most a few thousand
+        # characters and happens at most ten times a second.
+        if self.streaming_block_start < 0 or self.turn_call < 0:
+            return
+        sv = self.story_view
+        doc = sv.document()
+        if doc is None or self.streaming_block_start > doc.characterCount():
+            return  # the document was replaced under us, render_story() will restore the prose
+        c = sv.textCursor()
+        c.beginEditBlock()
+        c.setPosition(self.streaming_block_start)
+        c.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+        c.removeSelectedText()
+        if self.streamed_narrative:
+            insert_html_block(c, response_to_html(self.streamed_narrative, ContentType.markdown))
+        c.endEditBlock()
+        if self.streaming_pin_value < 0:
+            self.pin_streaming_turn()
+        else:
+            # Keep the blank space below the prose just large enough to hold
+            # the view where it was pinned: as the prose grows into it, the
+            # space shrinks, so that once the turn is long enough to fill the
+            # view on its own there is no blank space left at all.
+            self.pad_story_to_scroll_value(self.streaming_pin_value)
+
+    def pin_streaming_turn(self) -> None:
+        # Called when the first words of a turn have been rendered: scroll the
+        # start of the turn to the top of the view, padding the story with
+        # blank space below it so that it can get there, and leave the view
+        # there. The prose then fills the blank space as it is written, rather
+        # than the view chasing it downwards, which makes it hard to read.
+        # Once the prose has filled the view, reading on is up to the player.
+        if self.streaming_turn_start < 0:
+            return
+        vsb = self.story_view.verticalScrollBar()
+        if vsb is None:
+            return
+        self.scroll_position_to_y(self.streaming_turn_start, 0)
+        self.streaming_pin_value = vsb.value()
+
+    def quick_action(self, action_number: int) -> QuickAction | None:
+        # The zero based action_number quick action of the last turn, None
+        # when there is no such action.
         if self.state is None or not self.state.turns:
-            return ''
+            return None
         actions = self.state.turns[-1].turn.quick_actions
-        return actions[action_number] if 0 <= action_number < len(actions) else ''
+        return actions[action_number] if 0 <= action_number < len(actions) else None
 
     def activate_quick_action(self, action_number: int) -> None:
         # Put the quick action into the prompt box, submitting it when it is
         # already there, so that activating an action twice plays it.
-        action = self.quick_action(action_number)
-        if not action:
+        a = self.quick_action(action_number)
+        if a is None:
             return
+        action = a.text
         if self.prompt_edit.toPlainText().strip() == action:
             self.take_action()
             return
@@ -1133,11 +649,14 @@ class GameWidget(QWidget):
             action_number = int(url.path())
         except ValueError:
             return
-        if action := self.quick_action(action_number):
-            tip = f'<p>{escape(action)}'
+        if (a := self.quick_action(action_number)) is not None:
+            tip = ''
+            if kind := quick_action_kind_name(a.kind):
+                tip = _('Kind of action: {}').format(kind) + '<br>'
             if action_number < MAX_QUICK_ACTION_SHORTCUTS:
-                tip += '<br>' + _('Shortcut: {}').format(f'Ctrl+{action_number + 1}')
-            QToolTip.showText(QCursor.pos(), tip, self.story_view)
+                tip += _('Shortcut: {}').format(f'Ctrl+{action_number + 1}') + '<br>'
+            tip += _('Click twice to take this action: once to put it in the box below, again to send it to the AI')
+            QToolTip.showText(QCursor.pos(), f'<p>{tip}', self.story_view)
         else:
             QToolTip.hideText()
 
@@ -1158,8 +677,8 @@ class GameWidget(QWidget):
         text_parts.append(t.turn.narrative)
         html_parts.append(response_to_html(t.turn.narrative, ContentType.markdown))
         if tn == len(state.turns) and t.turn.quick_actions:
-            text_parts.append(_('Quick actions') + ':\n' + '\n'.join(f'• {a}' for a in t.turn.quick_actions))
-            html_parts.append(f'<h4>{_("Quick actions")}</h4>' + ''.join(f'<p>• {escape(a)}</p>' for a in t.turn.quick_actions))
+            text_parts.append(_('Quick actions') + ':\n' + '\n'.join(f'• {quick_action_as_text(a)}' for a in t.turn.quick_actions))
+            html_parts.append(f'<h4>{_("Quick actions")}</h4>' + ''.join(f'<p>• {escape(a.text)}{quick_action_kind_html(a)}</p>' for a in t.turn.quick_actions))
         md = QMimeData()
         md.setText('\n\n'.join(text_parts))
         md.setHtml(''.join(html_parts))
@@ -1174,6 +693,30 @@ class GameWidget(QWidget):
             self.status_bar.showMessage(_('Copied the text and scene picture of turn {} to the clipboard').format(tn), 5000)
         else:
             self.status_bar.showMessage(_('Copied the text of turn {} to the clipboard').format(tn), 5000)
+
+    def copy_current_turn_text_only(self) -> None:
+        state = self.state
+        tn = self.visible_turn_number()
+        if state is None or not tn:
+            return
+        t = state.turns[tn - 1]
+        text_parts: list[str] = []
+        html_parts: list[str] = []
+        if t.player_input:
+            text_parts.append(f'➤ {t.player_input}')
+            html_parts.append(f'<p><i>➤ {escape(t.player_input)}</i></p>')
+        text_parts.append(t.turn.narrative)
+        html_parts.append(response_to_html(t.turn.narrative, ContentType.markdown))
+        if tn == len(state.turns) and t.turn.quick_actions:
+            text_parts.append(_('Quick actions') + ':\n' + '\n'.join(f'• {quick_action_as_text(a)}' for a in t.turn.quick_actions))
+            html_parts.append(f'<h4>{_("Quick actions")}</h4>' + ''.join(f'<p>• {escape(a.text)}{quick_action_kind_html(a)}</p>' for a in t.turn.quick_actions))
+        md = QMimeData()
+        md.setText('\n\n'.join(text_parts))
+        md.setHtml(''.join(html_parts))
+        clipboard = qapplication_or_fail().clipboard()
+        assert clipboard is not None
+        clipboard.setMimeData(md)
+        self.status_bar.showMessage(_('Copied the text of turn {} to the clipboard').format(tn), 5000)
 
     def scroll_to_turn(self, turn_number: int) -> None:
         if not self.isVisible():
@@ -1190,11 +733,56 @@ class GameWidget(QWidget):
                 c = sv.textCursor()
                 c.setPosition(pos)
                 sv.setTextCursor(c)
-                sv.ensureCursorVisible()
-                vsb = sv.verticalScrollBar()
-                if vsb is not None:  # align the start of the turn with the top of the view
-                    vsb.setValue(vsb.value() + sv.cursorRect().top())
+                self.scroll_position_to_y(pos)  # align the start of the turn with the top of the view
                 break
+
+    def story_y_of_position(self, pos: int) -> int | None:
+        # The y coordinate, relative to the top of the viewport of the story
+        # view, at which the document position pos is currently drawn, None
+        # when it cannot be worked out. Negative for text scrolled off the
+        # top of the view.
+        sv = self.story_view
+        doc = sv.document()
+        if doc is None or not 0 <= pos < doc.characterCount():
+            return None
+        c = sv.textCursor()
+        c.setPosition(pos)
+        return sv.cursorRect(c).top()
+
+    def scroll_position_to_y(self, pos: int, y: int = 0) -> None:
+        # Scroll the story view so that the document position pos is drawn y
+        # pixels below the top of its viewport.
+        current = self.story_y_of_position(pos)
+        vsb = self.story_view.verticalScrollBar()
+        if current is not None and vsb is not None:
+            self.story_view.stopMomentumScroll()
+            target = vsb.value() + current - y
+            self.pad_story_to_scroll_value(target)
+            vsb.setValue(target)
+
+    def pad_story_to_scroll_value(self, value: int) -> None:
+        # Hold blank space at the bottom of the story, as much of it as is
+        # needed for the view to be scrollable to value and no more. The story
+        # is usually too short for the turn being read to be put at the top of
+        # the view, which is where it belongs: the prose of the turn being
+        # written grows into the space below it, and the space shrinks as it
+        # does, see pin_streaming_turn(). The space is held as the bottom
+        # margin of the root frame rather than as blank paragraphs, so that it
+        # is not part of the text: it moves nothing, is not copied with the
+        # story and is discarded by the clear() in render_story().
+        sv = self.story_view
+        doc, vp = sv.document(), sv.viewport()
+        if doc is None or vp is None or (frame := doc.rootFrame()) is None:
+            return
+        fmt = frame.frameFormat()
+        # The height of the story itself, that is without the space currently
+        # held at the bottom of it.
+        content = doc.size().height() - fmt.bottomMargin()
+        padding = max(0.0, value + vp.height() - content)
+        if abs(fmt.bottomMargin() - padding) < 1:
+            return  # sub-pixel changes are not worth a re-layout
+        fmt.setBottomMargin(padding)
+        frame.setFrameFormat(fmt)
 
     def visible_turn_number(self) -> int:
         # The one based number of the turn the player is currently reading,
@@ -1239,7 +827,7 @@ class GameWidget(QWidget):
         return ans
 
     def on_story_scrolled(self) -> None:
-        self.update_scene_panel()
+        self.scroll_settle_timer.start()
 
     # }}}
 
@@ -1388,15 +976,84 @@ class GameWidget(QWidget):
     def interesting_event(self) -> None:
         self.request_turn('', interesting_event=True)
 
-    def retry_turn(self) -> None:
-        # Abandon the in-flight generation, which keeps running on its thread
-        # but whose result is discarded as its call number no longer matches,
-        # and ask for the same turn again.
+    def on_turn_timeout(self) -> None:
         if self.turn_call < 0 or self.turn_request is None:
             return
-        player_input, interesting_event = self.turn_request
+        turn_request = self.turn_request
+        thinking_start = self._thinking_start
+        # The turn is still in flight and still paid for, so its call number
+        # is deliberately left alone: a result that arrives while the dialog
+        # below is open is stashed by on_turn_result() and applied afterwards.
+        self.turn_timed_out = True
+        self._stop_thinking()
+        timeout_minutes = data.turn_timeout_minutes()
+        d = error_dialog(
+            self,
+            _('AI response timed out'),
+            ngettext('The AI did not respond within {} minute.', 'The AI did not respond within {} minutes.', timeout_minutes).format(timeout_minutes),
+        )
+        should_retry = [False]
+        should_wait = [False]
+        retry_btn = d.bb.addButton(_('&Retry'), QDialogButtonBox.ButtonRole.ActionRole)
+        retry_btn.setIcon(QIcon.ic('view-refresh.png'))
+        wait_btn = d.bb.addButton(_('&Wait longer'), QDialogButtonBox.ButtonRole.ActionRole)
+        wait_btn.setIcon(QIcon.ic('jobs.png'))
+
+        timeout_widget = QWidget(d)
+        timeout_layout = QHBoxLayout(timeout_widget)
+        timeout_layout.setContentsMargins(0, 0, 0, 0)
+        timeout_label = QLabel(_('&Timeout (minutes, 0 = no timeout):'), timeout_widget)
+        timeout_spin = QSpinBox(timeout_widget)
+        timeout_spin.setRange(0, 60)
+        timeout_spin.setValue(timeout_minutes)
+        timeout_label.setBuddy(timeout_spin)
+        timeout_layout.addWidget(timeout_label)
+        timeout_layout.addWidget(timeout_spin)
+        timeout_layout.addStretch()
+        d.gridLayout.removeWidget(d.bb)
+        d.gridLayout.addWidget(timeout_widget, 3, 0, 1, 2)
+        d.gridLayout.addWidget(d.bb, 4, 0, 1, 2)
+
+        def on_retry() -> None:
+            should_retry[0] = True
+            d.accept()
+
+        def on_wait() -> None:
+            should_wait[0] = True
+            d.accept()
+
+        retry_btn.clicked.connect(on_retry)
+        wait_btn.clicked.connect(on_wait)
+        self.turn_timeout_dialog = d
+        try:
+            d.exec()
+        finally:
+            self.turn_timeout_dialog = None
+            self.turn_timed_out = False
+        new_timeout = timeout_spin.value()
+        data.set_turn_timeout_minutes(new_timeout)
+        if (late := self.late_turn_result) is not None:
+            # The turn arrived while this dialog was open. It is complete and
+            # paid for, so apply it whatever the player chose in the dialog.
+            self.late_turn_result = None
+            self.on_turn_result(*late)
+            return
+        if should_wait[0]:
+            self._thinking_start = thinking_start
+            self._update_thinking_elapsed()
+            self.input_stack.start()
+            self._thinking_ticker.start()
+            if new_timeout > 0:
+                self.turn_timer.setInterval(new_timeout * 60 * 1000)
+                self.turn_timer.start()
+            return
+        # The player gave up on this turn, so a result for it is now stale
         self.turn_call = -1
-        self.request_turn(player_input, interesting_event)
+        self.turn_request = None
+        self.discard_pending_turn_display()
+        if should_retry[0]:
+            player_input, interesting_event = turn_request
+            self.request_turn(player_input, interesting_event)
 
     def request_turn(self, player_input: str, interesting_event: bool = False) -> None:
         if self.state is None or self.turn_call > -1:
@@ -1410,41 +1067,118 @@ class GameWidget(QWidget):
         snapshot = deserialize_game(serialize_game(self.state))
         self.turn_call = next(self.turn_counter)
         self.turn_request = (player_input, interesting_event)
+        self.streamed_narrative = ''
+        self._thinking_start = monotonic()
+        self.input_stack.msg = _('Thinking…')
         self.input_stack.start()
+        self._thinking_ticker.start()
+        timeout = data.turn_timeout_minutes()
+        if timeout > 0:
+            self.turn_timer.setInterval(timeout * 60 * 1000)
+            self.turn_timer.start()
+        # Show the action being taken where the prose of the turn will appear
+        # as the AI writes it, see on_turn_narrative()
+        self.render_story()
+        # The action being taken is shown at the end of the story. The view is
+        # left where it is from here on, until the first words the AI writes
+        # arrive, see pin_streaming_turn().
+        self.streaming_pin_value = -1
+        if (vsb := self.story_view.verticalScrollBar()) is not None:
+            vsb.setValue(vsb.maximum())
         Thread(name='CYOATurn', daemon=True, target=self.do_turn, args=(snapshot, player_input, interesting_event, self.turn_call, plugin)).start()
 
     def do_turn(self, snapshot: GameState, player_input: str, interesting_event: bool, call_number: int, plugin: AIProvider) -> None:
+        def on_narrative(text: str) -> None:
+            if not sip.isdeleted(self):
+                self.turn_narrative_received.emit(call_number, text)
+
         try:
             # the preferences overlay is thread local so must be entered here
             with data.cyoa_ai_settings():
-                res = next_turn(snapshot, player_input, plugin, interesting_event=interesting_event)
+                res = next_turn(snapshot, player_input, plugin, interesting_event=interesting_event, on_narrative=on_narrative)
             if sip.isdeleted(self):
                 return
             self.turn_result_received.emit(call_number, snapshot, res)
         except RuntimeError:
             pass  # when self gets deleted between call to sip.isdeleted and next statement
 
+    def on_turn_narrative(self, call_number: int, text: str) -> None:
+        if call_number != self.turn_call:
+            return  # a stale fragment from a superseded or cancelled call
+        first = not self.streamed_narrative
+        self.streamed_narrative += text
+        if first:
+            self._update_thinking_elapsed()  # switch to "Writing…"
+        # An AI that is writing has not stopped responding, so the timeout
+        # is measured from the last fragment received rather than from the
+        # start of the turn.
+        if self.turn_timer.isActive():
+            self.turn_timer.start()
+        if not self.narrative_render_timer.isActive():
+            self.narrative_render_timer.start()
+
     def on_turn_result(self, call_number: int, snapshot: GameState, res: StructuredOutputResult) -> None:
         if call_number != self.turn_call:
             return  # a stale result from a superseded or cancelled call
+        if self.turn_timed_out:
+            # The timeout dialog is asking the player what to do about this
+            # very turn, so keep the result and let on_turn_timeout() apply it
+            # once the dialog is closed instead of changing the game behind it.
+            self.late_turn_result = (call_number, snapshot, res)
+            if (d := self.turn_timeout_dialog) is not None:
+                d.accept()
+            return
+        self.turn_timer.stop()
+        turn_request = self.turn_request
         self.turn_call = -1
         self.turn_request = None
-        self.input_stack.stop()
+        self._stop_thinking()
         if res.exception is not None:
-            error_dialog(
+            self.discard_pending_turn_display()
+            d = error_dialog(
                 self,
                 _('Failed to generate the next turn'),
                 _('The AI failed to continue the story: {}').format(res.exception),
                 det_msg=res.error_details,
-                show=True,
             )
+            should_retry = [False]
+            retry_btn = d.bb.addButton(_('&Retry'), QDialogButtonBox.ButtonRole.ActionRole)
+            retry_btn.setIcon(QIcon.ic('view-refresh.png'))
+
+            def on_retry() -> None:
+                should_retry[0] = True
+                d.accept()
+
+            retry_btn.clicked.connect(on_retry)
+            d.exec()
+            if should_retry[0] and turn_request is not None:
+                player_input, interesting_event = turn_request
+                self.request_turn(player_input, interesting_event)
             return
+        chapter_before = self.state.current_chapter if self.state is not None else -1
         self.state = snapshot
         self.session_cost += res.cost
+        was_streaming = bool(self.streamed_narrative)
+        self.streamed_narrative = ''
+        self.narrative_render_timer.stop()
+        self.streaming_pin_value = -1
+        # Before render_story() clears the document, remember where on screen
+        # the turn being written starts, so that the finished turn can be put
+        # in exactly the same place: the player is reading the prose and it
+        # must not move under them as it is replaced. Only the prose of the
+        # turn changes, so everything above its start is left where it is too.
+        # This is not possible when the turn opens a new chapter, as then the
+        # rest of the story leaves the view, nor when the AI did not stream
+        # its prose, as then the turn has not been seen at all yet.
+        anchor_y = None
+        if was_streaming and self.streaming_turn_start >= 0 and snapshot.current_chapter == chapter_before:
+            anchor_y = self.story_y_of_position(self.streaming_turn_start)
         self.prompt_edit.clear()
         self.prompt_edit.setFocus(Qt.FocusReason.OtherFocusReason)
         self.autosave()
-        self.refresh_ui()
+        self.refresh_ui(anchor_y is None)
+        if anchor_y is not None and self.turn_positions:
+            self.scroll_position_to_y(self.turn_positions[-1][0], anchor_y)
         if self.images_enabled:
             self.request_image(len(snapshot.turns))
         self._notify_turn_ready()
@@ -1573,19 +1307,19 @@ class GameWidget(QWidget):
         if not self.game_id or self.state is None:
             return
         try:
-            data.save_game(self.game_id, self.state, self.images, npc_portraits=self.npc_portraits)
+            data.save_game(self.game_id, self.state, self.images, portraits=self.portraits)
         except Exception as e:
             self.status_bar.showMessage(_('Failed to auto-save the game: {}').format(e), 10000)
 
     def save_game_as(self) -> None:
         if self.state is None:
             return
-        d = SaveGameDialog(self.last_save_name, self)
+        d = SaveGameDialog(self.last_save_name, self.state, self.images, self.portraits, data.creation_time(data.game_file(self.game_id)), self)
         if d.exec() != Dialog.DialogCode.Accepted:
             return
         name = d.save_name
         try:
-            data.save_game(name, self.state, self.images, base=data.saves_dir(), npc_portraits=self.npc_portraits)
+            data.save_game(name, self.state, self.images, base=data.saves_dir(), portraits=self.portraits)
         except Exception as e:
             error_dialog(self, _('Failed to save game'), _('Failed to save the game: {}').format(e), show=True)
             return
@@ -1601,7 +1335,7 @@ class GameWidget(QWidget):
         ):
             return
         try:
-            state, images, npc_portraits = data.load_game(d.save_name, base=data.saves_dir())
+            state, images, portraits = data.load_game(d.save_name, base=data.saves_dir())
         except Exception as e:
             error_dialog(self, _('Failed to load game'), _('Failed to load the saved game "{0}": {1}').format(d.save_name, e), show=True)
             return
@@ -1609,7 +1343,7 @@ class GameWidget(QWidget):
         self.state = state
         self.images = images
         self.failed_image_turns = set()
-        self.npc_portraits = npc_portraits
+        self.portraits = portraits
         self.last_save_name = d.save_name
         self.autosave()
         self.refresh_ui()
@@ -1666,34 +1400,74 @@ class GameWidget(QWidget):
         ):
             self.game_abandoned.emit()
 
-    def edit_characters(self) -> None:
+    def edit_world(self) -> None:
         state = self.state
         if state is None:
             return
-        d = CharactersDialog(state, self.npc_portraits, self)
+        d = EditWorldDialog(state, self.portraits, self)
         if d.exec() != Dialog.DialogCode.Accepted:
             return
-        self.npc_portraits = d.npc_portraits
-        state.character = d.player_character
-        if -1 < d.played_idx < len(state.world.characters):
-            chars = list(state.world.characters)
-            chars[d.played_idx] = d.player_character
-            state.world = state.world._replace(characters=tuple(chars))
-        # Apply the NPC edits to the summaries of all stored turns, matching
-        # by the original names, so the edits survive rewinding the game.
-        if edits := dict(zip(d.npc_original_names, d.npcs)):
-            for i, t in enumerate(state.turns):
-                s = t.turn.updated_summary
-                characters = tuple(edits.get(c.name, c) for c in s.characters)
-                if characters != s.characters:
-                    state.turns[i] = t._replace(turn=t.turn._replace(updated_summary=s._replace(characters=characters)))
-        if self.game_id:  # an empty game_id means a test/demo that must not touch the config directory
-            # keep the saved world, where the playable characters' portraits
-            # live, in sync with the edits; NPC portraits are saved with the
-            # game by autosave()
-            data.add_saved_world(state.brief, state.world, state.art_style, d.portraits)
-            self.autosave()
-        self.status_bar.showMessage(_('Changes to the characters will be used from the next turn'), 5000)
+        self.portraits = d.portraits
+        # The world holds the only copy of the played character, which
+        # state.character is a view of.
+        chars = list(state.world.characters)
+        chars[state.character_index] = d.player_character
+        state.world = state.world._replace(characters=tuple(chars))
+        edits = {c.id: c for c in d.npcs if c.id}
+        if edits and not state.turns:
+            # Until the first turn has been played the cast of the story comes
+            # from the world rather than from a stored summary, so edits to it
+            # have to go back into the world to survive at all, see
+            # calibre.ai.cyoa.initial_summary().
+            npcs = []
+            old_ids = npc_character_ids(state.world.npcs)
+            for npc, cid in zip(state.world.npcs, old_ids):
+                c = edits.get(cid)
+                npcs.append(
+                    npc if c is None else NonPlayerCharacter(name=c.name, description=c.description, backstory=c.backstory, relationships=c.relationships)
+                )
+            state.world = state.world._replace(npcs=tuple(npcs))
+            # These ids are derived from the names of the characters, so
+            # renaming one changes their id, which their portrait is stored
+            # under, and it has to move with them.
+            for old_id, new_id in zip(old_ids, npc_character_ids(state.world.npcs)):
+                if old_id != new_id and (p := self.portraits.pop(old_id, None)) is not None:
+                    self.portraits[new_id] = p
+        # Apply the edits to the summaries of the stored turns. What is
+        # durable about a character reaches every turn, so that it survives
+        # rewinding the game, and the state they are in only the last one, see
+        # calibre.ai.cyoa.apply_character_edits(). The played character is
+        # passed separately because the world, not the summary, holds the copy
+        # of them the dialog edits.
+        apply_character_edits(state, edits, d.player_character)
+        # The story memory, unlike the characters, is a snapshot of where the
+        # story stands, so it is applied to the last turn alone: going back to
+        # an earlier turn must restore the memory as it was at that turn.
+        if (memory := d.story_memory) is not None:
+            t = state.turns[-1]
+            state.turns[-1] = t._replace(
+                summary=t.summary._replace(
+                    world=memory.world,
+                    major_events=memory.major_events,
+                    current_situation=memory.current_situation,
+                    upcoming_events=memory.upcoming_events,
+                )
+            )
+        # Takes effect from the next turn: the instructions sent to the AI are
+        # built from the game state every turn, so the prose already written
+        # keeps the style it was written in.
+        state.style = d.updated_style
+        # The saved world the game started from is only its template, so it is
+        # deliberately left alone: the edited characters and their portraits
+        # belong to this game and are stored with it.
+        self.autosave()
+        self.status_bar.showMessage(_('Changes to the world will be used from the next turn'), 5000)
+
+    def read_story(self) -> None:
+        # The story so far as a book: all of its chapters, not just the one
+        # being played, in a dialog of their own.
+        if self.state is not None and self.state.turns:
+            ReadStoryDialog(self.state, self.images, self, self.portraits).exec()
 
     def change_settings(self) -> None:
         if SettingsDialog(self).exec() != Dialog.DialogCode.Accepted:
@@ -1708,6 +1482,7 @@ class GameWidget(QWidget):
             self.image_call = -1
             self.image_turn = -1
         self.apply_images_enabled()
+        self.refresh_text_display()
         self.update_status()  # show the newly configured models in the status bar
         state = self.state
         if self.images_enabled and state is not None and state.turns and len(state.turns) not in self.images:
@@ -1718,36 +1493,75 @@ class GameWidget(QWidget):
 
 
 if __name__ == '__main__':
-    from calibre.ai.cyoa import CharacterState, GeneratedWorld, PlayerCharacter, StorySummary, StoryTurn, start_game
+    import json
+
+    from calibre.ai.cyoa import (
+        PROTAGONIST_ID,
+        CharacterDelta,
+        GeneratedWorld,
+        PlayerCharacter,
+        QuickActionKind,
+        StoryTurn,
+        SummaryUpdate,
+        as_jsonable,
+        start_game,
+    )
+    from calibre.ai.structured import OnText, spec_for_class
     from calibre.gui2 import Application
 
     class FakePlugin:
-        # Plays canned turns so the widget can be exercised without an AI
+        # Plays canned turns so the widget can be exercised without an AI,
+        # streaming their JSON a few characters at a time like an AI would
         counter = count(start=1)
 
-        def generate_structured_output(self, prompt: str, schema: type, instructions: str = '', use_model: str = '') -> StructuredOutputResult:
+        def generate_structured_output(
+            self, prompt: str, schema: type, instructions: str = '', use_model: str = '', on_text: OnText | None = None
+        ) -> StructuredOutputResult:
             import time
 
             time.sleep(1)
             n = next(self.counter)
             turn = StoryTurn(
-                narrative=f'**Turn {n}**: The mist *swirls* around you as something stirs in the distance.\n\nYou must decide quickly.',
-                quick_actions=(f'Look around (turn {n})', 'Call out', 'Run away'),
+                narrative=f'**Turn {n}**: The mist *swirls* around you as something stirs in the distance.\n\nYou must decide quickly.'
+                + ' The fog thickens with every breath you take, and somewhere ahead a bell begins to toll.' * 3,
+                quick_actions=(
+                    QuickAction(f'Wait and watch (turn {n})', QuickActionKind.cautious),
+                    QuickAction('Charge into the mist', QuickActionKind.bold),
+                    QuickAction('Call out to whoever is there', QuickActionKind.social),
+                ),
                 scene_description='A foggy city street at night.',
-                updated_summary=StorySummary(
-                    world='A city lost in mist.',
-                    major_events=tuple(f'event {i}' for i in range(1, n + 1)),
-                    characters=(
-                        CharacterState('Ada', 'the player', 'She built the mist engines.', 'alone so far'),
-                        CharacterState('Marlo', 'a mist-runner who guides travelers', 'He grew up in the tunnels under the city.', "wary of Ada's engines"),
-                    ),
+                summary_update=SummaryUpdate(
                     current_situation='In the mist.',
+                    character_updates=(
+                        CharacterDelta(
+                            id=PROTAGONIST_ID,
+                            current_state='standing in the rain outside the depot',
+                            name='Ada',
+                            description='the player',
+                            backstory='She built the mist engines.',
+                            relationships='alone so far',
+                        ),
+                        CharacterDelta(
+                            id='marlo',
+                            current_state='waiting at the tunnel mouth, out of breath',
+                            name='Marlo',
+                            description='a mist-runner who guides travelers',
+                            backstory='He grew up in the tunnels under the city.',
+                            relationships="wary of Ada's engines",
+                        ),
+                    ),
+                    new_major_events=(f'event {n}',),
                     upcoming_events=('The mist thickens.',),
                 ),
                 starts_new_chapter=n > 1 and (n % 4) == 0,
                 chapter_title=f'Chapter of turn {n}' if n > 1 and (n % 4) == 0 else None,
             )
-            return StructuredOutputResult(data=turn, raw='{}', cost=0.01 * n, currency='USD', provider='fake', model='fake-model')
+            raw = json.dumps(as_jsonable(turn, spec_for_class(StoryTurn)))
+            if on_text is not None:
+                for i in range(0, len(raw), 6):
+                    on_text(raw[i : i + 6])
+                    time.sleep(0.02)
+            return StructuredOutputResult(data=turn, raw=raw, cost=0.01 * n, currency='USD', provider='fake', model='fake-model')
 
     app = Application([])
     w = GameWidget()
@@ -1756,7 +1570,7 @@ if __name__ == '__main__':
     world = GeneratedWorld(title='Mist City', world_description='A city lost in *perpetual* mist.', characters=(pc,))
     # An empty game_id disables auto-saving, so the demo does not touch the
     # calibre config directory.
-    w.load_game('', start_game('a foggy city', world, pc))
+    w.load_game('', start_game('a foggy city', world))
     w.game_abandoned.connect(lambda: print('game abandoned'))
     w.resize(1000, 720)
     w.show()
