@@ -40,7 +40,8 @@ from urllib.error import URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request
 
-from calibre.web.automate.camoufox import DEFAULT_TIMEOUT, Error, Page, TimeoutExceeded, debug, remove_profile_dir
+from calibre.web.automate.camoufox import DEFAULT_TIMEOUT, Error, InputWedged, Page, TimeoutExceeded, debug, remove_profile_dir
+from calibre.web.automate.download_deps import Install
 from calibre.web.automate.worker import make_request, start_worker
 
 # The recipe thread pool defaults to five threads and a tab costs real memory,
@@ -49,6 +50,12 @@ DEFAULT_MAX_TABS = 5
 # How long to go on waiting for the DOM of a page whose load event never
 # arrived, usually because some tracker or advert is still spinning
 DOM_READY_GRACE = 10.0  # seconds
+# How often to look again at where a submitted form has got to
+FORM_POLL_INTERVAL = 0.25  # seconds
+# How many times to type into a form field that did not end up holding what
+# was typed, and how long to let the page settle before looking
+FILL_ATTEMPTS = 3
+FILL_RETRY_DELAY = 0.5  # seconds
 # Statuses that mean the server was busy rather than that the URL is wrong, so
 # that RecursiveFetcher knows to try once more
 RETRY_STATUSES = frozenset({
@@ -71,12 +78,6 @@ BROWSER_PREFS = {
     # Without this a navigation to a JSON document renders the browser's own
     # JSON viewer, whose markup is not what a recipe reading an API asked for
     'devtools.jsonview.enabled': False,
-    # Left to itself the browser asks for, and news sites happily serve, AVIF,
-    # which calibre cannot decode, so the images would all be thrown away
-    # further down the conversion pipeline. This is what Firefox itself sent
-    # before it gained AVIF support, so it is not a header a site has never
-    # seen, and webp is both smaller than jpeg and readable by calibre.
-    'image.http.accept': 'image/webp,*/*',
 }
 
 
@@ -310,17 +311,41 @@ async def fetch_document(session: Session, page: Page, url: str, timeout: float)
         # still perfectly usable as long as its DOM has been built
         debug(f'{url} did not finish loading within {timeout} seconds, using it as it stands')
         await page.wait_for_dom_ready(DOM_READY_GRACE)
+    return await rendered_document(session, page, url, timeout)
+
+
+async def rendered_document(session: Session, page: Page, url: str, timeout: float) -> dict[str, Any]:
+    """Hand back the document the session's tab is showing, which it navigated
+    to on the way to url."""
     final_url = await page.current_url()
     session.document_url = final_url
     response = page.response_for(final_url) or page.response_for(page.url) or page.response_for(url)
     status = response.status if response is not None else int(HTTPStatus.OK)
     reason = response.status_text if response is not None else ''
     headers = list(response.headers) if response is not None else []
+    if status == HTTPStatus.NOT_MODIFIED:
+        # The browser revalidated a document it already had and was told to use
+        # its own copy, which it did, so the tab is showing the document even
+        # though the status code on its own reads as a failure. This is routine
+        # for a recipe that retries a request the site answered with a bot
+        # check, since by then the browser has the page from the attempt that
+        # the check's own scripts reloaded. A 304 carries neither a body nor a
+        # content type, so the rendered document in the tab is both all there
+        # is to hand back and the only thing the status says anything about.
+        status, reason, headers = int(HTTPStatus.OK), '', []
     if not (200 <= status < 300) and status:
         return error_result(f'HTTP {status} {reason}'.strip(), status=status, worth_retry=status in RETRY_STATUSES, url=final_url)
     if content_type_of(headers) not in RENDERED_CONTENT_TYPES and headers:
         # Something the browser does not render as a document, such as the JSON
-        # an API returns. Hand back the bytes the server actually sent.
+        # an API returns or the XML of a feed. Hand back the bytes the server
+        # actually sent.
+        #
+        # The tab is left holding something that is not an HTML document, which
+        # has no sub-resources for a later fetch_resource() to take out of it
+        # and, being a bare XML document, cannot even host the <img> used to
+        # ask for one. So the session is recorded as not working on a document
+        # at all and whatever it asks for next is navigated to instead.
+        session.document_url = ''
         resource = await page.get_resource(final_url, timeout=timeout)
         return result_from_response(final_url, status, reason, headers, resource.data)
     html = await page.call(DOCUMENT_HTML_JS, timeout=timeout)
@@ -349,7 +374,13 @@ async def fetch_resource(page: Page, url: str, timeout: float) -> dict[str, Any]
         status = response.status if response is not None else 0
         return error_result(str(err), status=status, worth_retry=not status or status in RETRY_STATUSES, url=url)
     headers = [('Content-Type', resource.content_type)] if resource.content_type else []
-    return result_from_response(url, resource.status, '', headers, resource.data)
+    status = resource.status
+    if status == HTTPStatus.NOT_MODIFIED and resource.data:
+        # Revalidated out of the browser's cache, which happens for an image
+        # two articles share. The bytes came from the browser rather than from
+        # the wire, so having them is what makes this a success.
+        status = int(HTTPStatus.OK)
+    return result_from_response(url, status, '', headers, resource.data)
 
 
 async def do_fetch(state: State, request: Mapping[str, Any]) -> dict[str, Any]:
@@ -377,6 +408,107 @@ async def do_fetch(state: State, request: Mapping[str, Any]) -> dict[str, Any]:
         return await fetch_resource(page, url, timeout)
 
 
+async def fill_field(page: Page, selector: str, value: str, remaining: Callable[[], float]) -> bool:
+    """Type value into the field matching selector, returning whether it took.
+
+    A form built with a JavaScript framework is liable to render its fields
+    again just after the page has loaded, replacing the element that was
+    clicked on, so that what is typed goes nowhere, or clearing what was typed
+    into it. Either way typing it again, into what is there now, is what works,
+    and looking at what the field holds afterwards is the only way to know.
+    """
+    for attempt in range(FILL_ATTEMPTS):
+        if attempt:
+            await asyncio.sleep(min(FILL_RETRY_DELAY, remaining()))
+        try:
+            await page.fill(selector, value, timeout=remaining())
+            await asyncio.sleep(min(FILL_RETRY_DELAY, remaining()))
+            element = await page.find(selector)
+            if element is None:
+                continue
+            try:
+                if await element.value() == value:
+                    return True
+            finally:
+                await element.dispose()
+        except TimeoutExceeded, InputWedged:
+            raise
+        except Error as err:
+            # Not the message itself, which quotes what was being typed
+            debug(f'Typing into {selector} failed with {type(err).__name__}, attempt {attempt + 1} of {FILL_ATTEMPTS}')
+    return False
+
+
+async def submit_form(session: Session, page: Page, request: Mapping[str, Any]) -> dict[str, Any]:
+    """Fill in and submit the form on a page, the way a person would.
+
+    Each value is typed into its field rather than assigned to it, since the
+    forms that need a browser at all, login forms in particular, are built with
+    JavaScript frameworks that only notice input arriving as key presses, and
+    the form is submitted by clicking its button. What the site answers with is
+    then waited for: the first navigation, or if the form hands the browser on
+    through a series of redirects, as a single sign on service does, the first
+    one that arrives at a URL starting with wait_for_url.
+    """
+    url = str(request['url'])
+    timeout = float(request.get('timeout') or DEFAULT_TIMEOUT)
+    fields = [(str(selector), str(value)) for selector, value in request.get('fields') or ()]
+    submit = str(request.get('submit') or '')
+    wait_for_url = str(request.get('wait_for_url') or '')
+    deadline = time.monotonic() + timeout
+
+    def remaining() -> float:
+        return max(deadline - time.monotonic(), 0)
+
+    loaded = await fetch_document(session, page, url, timeout)
+    if loaded.get('error'):
+        return loaded
+    # Neither the values nor anything derived from them is ever logged, since
+    # what goes into a login form is a password
+    try:
+        for selector, value in fields:
+            if not await fill_field(page, selector, value, remaining):
+                return error_result(f'Submitting the form at {url} failed: could not type into {selector}', url=page.url)
+        form_context = context = await page.wait_for_execution_context(remaining())
+        if submit:
+            await page.click(submit, timeout=remaining())
+        else:
+            await page.press(fields[-1][0], 'Enter', timeout=remaining())
+
+        def arrived() -> bool:
+            return context != form_context and (not wait_for_url or page.url.startswith(wait_for_url))
+
+        # The URL of the page and its JavaScript context are reported by events
+        # of their own, in no particular order, so rather than waiting for a
+        # context and then looking at the URL, which can still be that of the
+        # page before, both are looked at again every time anything arrives
+        while not arrived():
+            try:
+                context = await page.wait_for_new_execution_context(context, min(remaining(), FORM_POLL_INTERVAL))
+            except TimeoutExceeded:
+                if not remaining():
+                    where = f'arrived at {wait_for_url}' if wait_for_url else 'gone anywhere'
+                    raise TimeoutExceeded(f'the browser had not {where} {timeout:g} seconds after the form was submitted, it is at {page.url}')
+        try:
+            await page.wait_for_load(timeout=remaining())
+        except TimeoutExceeded:
+            await page.wait_for_dom_ready(DOM_READY_GRACE)
+    except TimeoutExceeded as err:
+        return error_result(f'Submitting the form at {url} timed out: {err}', url=page.url)
+    except Error as err:
+        return error_result(f'Submitting the form at {url} failed: {err}', url=page.url)
+    return await rendered_document(session, page, page.url, remaining() or DOM_READY_GRACE)
+
+
+async def do_submit_form(state: State, request: Mapping[str, Any]) -> dict[str, Any]:
+    timeout = float(request.get('timeout') or DEFAULT_TIMEOUT)
+    session = await state.session_for(str(request['session']))
+    async with session.lock:
+        session.last_used = time.monotonic()
+        page = await state.page_for(session, timeout)
+        return await submit_form(session, page, request)
+
+
 def origin_of(url: str) -> str:
     parts = urlparse(url)
     return f'{parts.scheme}://{parts.netloc}/' if parts.scheme and parts.netloc else url
@@ -391,12 +523,18 @@ async def setup_browser(input_data: Mapping[str, Any]) -> None:
     if input_data.get('warmup', True):
         warmup = Warmup(excluded_domains=input_data.get('warmup_excluded_domains') or ())
         debug(f'Warming up camoufox on: {", ".join(warmup.urls)}')
+    install = None
+    if (install_data := input_data.get('install')) is not None:
+        install = Install(*install_data)
     browser = Browser(
         headless=bool(input_data.get('headless', True)),
         warmup=warmup,
         block_images=bool(input_data.get('block_images', False)),
         ignore_https_errors=not input_data.get('verify_ssl_certificates', False),
         firefox_user_prefs=BROWSER_PREFS,
+        install=install,
+        typing_wpm=float(input_data.get('typing_wpm') or 0),
+        humanize=float(input_data.get('max_move_time') or 0) or False,
     )
     started = time.monotonic()
     await browser.launch()
@@ -412,6 +550,9 @@ async def handle_request(input_data: Mapping[str, Any], request: Mapping[str, An
         case 'fetch':
             await state.apply_headers([(str(n), str(v)) for n, v in request.get('extra_headers') or ()])
             return await do_fetch(state, request)
+        case 'submit_form':
+            await state.apply_headers([(str(n), str(v)) for n, v in request.get('extra_headers') or ()])
+            return await do_submit_form(state, request)
         case 'release':
             await state.release(str(request['session']))
             return True
@@ -570,6 +711,18 @@ class Worker:
                 close_worker()
 
 
+def response_from_result(result: Mapping[str, Any]) -> Response:
+    """Turn what the worker answered a request with into a Response, raising
+    the URLError, with the HTTP status as its code, of a failed one."""
+    if result.get('error'):
+        err = URLError(result['error'])
+        setattr(err, 'worth_retry', bool(result.get('worth_retry')))
+        if result.get('status'):
+            setattr(err, 'code', int(result['status']))
+        raise err
+    return Response(result)
+
+
 def shutdown_worker(ref: weakref.ReferenceType[Worker]) -> None:
     worker = ref()
     if worker is not None:
@@ -592,6 +745,12 @@ class Browser:
     :param block_images: do not load images at all, for a recipe that does not
         want them
     :param start_worker: launch the browser now rather than on first use
+    :param install: an existing install of the browser to use as is, rather
+        than installing or updating it as needed
+    :param typing_wpm: how fast to type into forms, in words per minute, the
+        default, 0, means a moderately quick human typist
+    :param max_move_time: the longest, in seconds, a cursor movement may take,
+        the default, 0, means as long as a human hand would take
     """
 
     # Read by RecursiveFetcher, which knows which of the URLs it asks for are
@@ -611,6 +770,9 @@ class Browser:
         max_tabs: int = DEFAULT_MAX_TABS,
         block_images: bool = False,
         start_worker: bool = False,
+        install: Install | None = None,
+        typing_wpm: float = 0,
+        max_move_time: float = 0,
     ) -> None:
         self.addheaders: list[tuple[str, str]] = list(headers)
         self.session_id = secrets.token_hex(16)
@@ -622,6 +784,9 @@ class Browser:
             'max_tabs': max_tabs,
             'block_images': block_images,
             'verify_ssl_certificates': verify_ssl_certificates,
+            'install': None if install is None else list(install),
+            'typing_wpm': typing_wpm,
+            'max_move_time': max_move_time,
         })
         atexit.register(shutdown_worker, weakref.ref(self.worker))
         if user_agent:
@@ -687,13 +852,7 @@ class Browser:
             'timeout': timeout,
             'as_document': as_document,
         })
-        if result.get('error'):
-            err = URLError(result['error'])
-            setattr(err, 'worth_retry', bool(result.get('worth_retry')))
-            if result.get('status'):
-                setattr(err, 'code', int(result['status']))
-            raise err
-        return Response(result)
+        return response_from_result(result)
 
     def open(self, url_or_request: Request | str, data: Any = None, timeout: float | None = None, as_document: bool = True) -> Response:  # noqa: ANN401
         """Load a URL the way a person clicking a link would.
@@ -716,6 +875,51 @@ class Browser:
 
     def is_method_ok(self, method: str) -> bool:
         return True
+
+    def submit_form(
+        self,
+        url: str,
+        fields: Mapping[str, str],
+        submit: str = '',
+        wait_for_url: str = '',
+        timeout: float | None = None,
+    ) -> Response:
+        """Fill in and submit the form on the page at url, typically to log in.
+
+        :param fields: maps the CSS selector of each field to the value to type
+            into it, in the order they are to be filled in
+        :param submit: the CSS selector of the button that submits the form, if
+            not given Enter is pressed in the last field instead
+        :param wait_for_url: when submitting the form leads through a series of
+            pages, as logging in with a single sign on service does, the prefix
+            of the URL of the page it ends up on, otherwise the first page the
+            browser navigates to is the one handed back
+        :param timeout: for the whole thing, from loading the page to the site
+            answering the form
+
+        The page is loaded in this browser's tab, each value is typed into its
+        field the way a person would type it and the submit button is clicked,
+        which is what the forms built with JavaScript frameworks, which is to
+        say most login forms, need in order to notice the values at all. Any
+        cookies the site sets in answer are, as always, shared by every tab.
+
+        Hands back the page the browser ends up on, like :meth:`open`, and
+        raises a :class:`URLError` if a field or the submit button never
+        appears or the site never answers.
+        """
+        if not fields and not submit:
+            raise ValueError('Submitting a form needs either fields to fill in or a button to click')
+        result = self.worker.request({
+            'action': 'submit_form',
+            'session': self.session_id,
+            'url': url,
+            'fields': [(str(selector), str(value)) for selector, value in fields.items()],
+            'submit': submit,
+            'wait_for_url': wait_for_url,
+            'extra_headers': self.addheaders,
+            'timeout': timeout,
+        })
+        return response_from_result(result)
 
     # }}}
 

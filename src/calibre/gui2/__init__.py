@@ -93,6 +93,7 @@ from calibre.utils.localization import _, bcp47_locale_name, install_qt_translat
 from calibre.utils.resources import get_image_path as I
 from calibre.utils.resources import get_path as P
 from calibre.utils.resources import user_dir
+from calibre_extensions import avif as _avif_plugin  # noqa: F401  registers the AVIF image format with Qt
 from calibre_extensions.progress_indicator import icon_from_name, icon_from_paths, set_icon_theme
 
 del pqc, geometry_for_restore_as_dict
@@ -526,6 +527,7 @@ def create_defs():
     defs['color_palette'] = 'system'
     defs['tag_browser_old_look'] = False
     defs['tag_browser_hide_empty_categories'] = False
+    defs['tag_browser_folders_first'] = False
     defs['tag_browser_always_autocollapse'] = False
     defs['tag_browser_restore_tree_expansion'] = False
     defs['tag_browser_allow_keyboard_focus'] = False
