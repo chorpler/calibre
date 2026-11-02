@@ -12,7 +12,7 @@ import textwrap
 from collections import OrderedDict, deque
 from io import BytesIO
 from queue import Empty, Queue
-from typing import Literal, overload
+from typing import TYPE_CHECKING, Literal, overload
 
 import apsw
 from qt.core import QAction, QApplication, QDialog, QDialogButtonBox, QEvent, QFont, QIcon, QMenu, QSystemTrayIcon, Qt, QTimer, QUrl, pyqtSignal
@@ -57,7 +57,6 @@ from calibre.gui2.proceed import ProceedQuestion
 from calibre.gui2.search_box import SavedSearchBoxMixin, SearchBox2, SearchBoxMixin
 from calibre.gui2.search_restriction_mixin import SearchRestrictionMixin
 from calibre.gui2.tag_browser.ui import AlterTagBrowser, TagBrowserMixin
-from calibre.gui2.tag_browser.view import TagsView
 from calibre.gui2.update import UpdateMixin
 from calibre.gui2.widgets import BusyCursor, ProgressIndicator
 from calibre.library import current_library_name
@@ -67,6 +66,9 @@ from calibre.utils.ipc.pool import Pool
 from calibre.utils.localization import _
 from calibre.utils.resources import get_image_path as I
 from calibre.utils.resources import get_path as P
+
+if TYPE_CHECKING:
+    from calibre.gui2.tag_browser.view import TagsView
 
 
 @overload
@@ -107,7 +109,7 @@ def add_quick_start_guide(library_view, refresh_cover_browser=None):
     mi = get_metadata(buf, 'epub')
     with PersistentTemporaryFile('.epub') as tmp:
         tmp.write(buf.getvalue())
-    library_view.model().add_books([tmp.name], ['epub'], [mi])
+    library_view.model().db.add_books([tmp.name], ['epub'], [mi])
     os.remove(tmp.name)
     library_view.model().books_added(1)
     if refresh_cover_browser is not None:
@@ -231,7 +233,7 @@ class Main(
     def add_istore(self, st):
         stmap = self.istores
         if st.name in stmap:
-            if st.priority >= stmap[st.name].priority:
+            if st.base_plugin.priority >= stmap[st.name].base_plugin.priority:
                 stmap[st.name] = st
         else:
             stmap[st.name] = st
@@ -809,6 +811,9 @@ class Main(
         if action == 'switch-library':
             library_id = decode_library_id(posixpath.basename(path))
             library_path = self.library_broker.path_for_library_id(library_id)
+            if library_path is None:
+                prints('Ignoring unknown library id', library_id, file=sys.stderr)
+                return
             if not db_matches(self.current_db, library_id, library_path):
                 self.library_moved(library_path)
         elif action == 'switch-library-by-path':
@@ -866,7 +871,7 @@ class Main(
                 nonlocal item_id, item_val
                 db = self.current_db.new_api
                 if item_id is None:
-                    item_id = db.get_item_id(field, item_val)
+                    item_id = db.get_item_id(field, item_val)  # ty: ignore[invalid-argument-type]
                     if item_id is None:
                         prints('The item named:', item_val, 'was not found', file=sys.stderr)
                         return
@@ -1348,6 +1353,9 @@ class Main(
     def read_settings(self):
         self.restore_geometry(gprefs, 'calibre_main_window_geometry', get_legacy_saved_geometry=lambda: config['main_window_geometry'])
         self.read_layout_settings()
+        # The Tag browser tree is built only if its pane is visible, which is
+        # known only now. It must be built before its expansion is restored.
+        self.tb_widget.set_pane_is_visible(self.layout_container.tag_browser_button.isChecked())
         self._restore_tb_expansion_state()
 
     def write_settings(self):

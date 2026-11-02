@@ -31,7 +31,7 @@ class RenderWorker(QThread):
 
     def run(self):
         try:
-            self.lrf = LRFDocument(self.stream)
+            self.lrf = LRFDocument(self.stream)  # ty: ignore[invalid-argument-type] stream is only None after run()
             self.lrf.parse()
             stream = self.stream
             assert stream is not None
@@ -145,7 +145,8 @@ class Main(MainWindow, Ui_MainWindow):
         )
         if files:
             file = files[0]
-            self.set_ebook(open(file, 'rb'))
+            # RenderWorker closes the stream after parsing
+            self.set_ebook(open(file, 'rb'))  # ruff: ignore[open-file-with-context-handler]
             self.render()
 
     def page_changed(self, num):
@@ -342,7 +343,7 @@ def main(args=sys.argv, logger=None):
         app = Application(args, override_program_name=override)
         app.setWindowIcon(QIcon.ic('viewer.png'))
         opts = normalize_settings(parser, opts)
-        stream = open(args[1], 'rb') if len(args) > 1 else None
+        stream = open(args[1], 'rb') if len(args) > 1 else None  # ruff: ignore[open-file-with-context-handler]
         main = file_renderer(stream, opts, logger=logger)
         main.set_exception_handler()
         main.show()

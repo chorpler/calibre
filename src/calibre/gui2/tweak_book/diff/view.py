@@ -3,11 +3,12 @@
 
 import re
 import unicodedata
-from collections import OrderedDict, namedtuple
+from collections import OrderedDict
 from difflib import SequenceMatcher
 from functools import partial
 from itertools import chain
 from math import ceil
+from typing import NamedTuple
 
 import regex
 from qt.core import (
@@ -57,7 +58,13 @@ from calibre.utils.localization import _
 from calibre.utils.xml_parse import safe_xml_fromstring
 from polyglot.builtins import as_bytes
 
-Change = namedtuple('Change', 'ltop lbot rtop rbot kind')
+
+class Change(NamedTuple):
+    ltop: int
+    lbot: int
+    rtop: int
+    rbot: int
+    kind: str
 
 
 def beautify_text(raw, syntax):
@@ -717,7 +724,7 @@ class DiffSplit(QSplitter):  # {{{
                 v.images[top] = (img, w, lines)
 
                 def mapnum(x):
-                    return x if x <= top else x + delta
+                    return x if x <= top else x + delta  # ruff: ignore[function-uses-loop-variable]
 
                 lnm = LineNumberMap()
                 lnm.max_width = v.line_number_map.max_width
@@ -1028,7 +1035,7 @@ class DiffView(QWidget):  # {{{
             assert bar is not None
             self.bars.append(bar)
             setattr(bar, 'scroll_idx', len(self.bars) - 1)
-            connect_lambda(bar.valueChanged[int], self, lambda self: self.scrolled(getattr(self.sender(), 'scroll_idx')))
+            connect_lambda(bar.valueChanged[int], self, lambda self: self.scrolled(self.sender().scroll_idx))
         self.view.left.resized.connect(self.resized)
         handle1 = self.view.handle(1)
         assert isinstance(handle1, DiffSplitHandle)

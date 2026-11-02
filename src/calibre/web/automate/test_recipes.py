@@ -12,6 +12,7 @@ import threading
 import unittest
 from collections import Counter
 from http.cookies import SimpleCookie
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse
@@ -22,8 +23,10 @@ from calibre.web.automate import browser as browser_module
 from calibre.web.automate import recipes
 from calibre.web.automate.bot_check import retry_bot_checks
 from calibre.web.automate.browser import Warmup
-from calibre.web.automate.download_deps import Install
 from calibre.web.automate.test_camoufox import TEST_MAX_MOVE_TIME, TEST_TYPING_WPM, installed_camoufox
+
+if TYPE_CHECKING:
+    from calibre.web.automate.download_deps import Install
 
 ARTICLE_PAGE = '''<!DOCTYPE html><html><head><title>An Article</title>
 <link rel="stylesheet" type="text/css" href="style.css">
@@ -261,7 +264,7 @@ class FakeBrowser:
         if status is None:
             return f'the page at {url}'
         err = URLError(f'HTTP {status}')
-        setattr(err, 'code', status)
+        err.code = status
         raise err
 
     open_novisit = open
@@ -388,6 +391,14 @@ class TestRecipeFillField(unittest.TestCase):
             async def value(self) -> str:
                 return self.page.value
 
+            async def fill(self, value: str) -> None:
+                page = self.page
+                page.attempts += 1
+                if page.attempts <= page.failures:
+                    page.value = value[:1]
+                    raise page.failure('a keydown was not acknowledged')
+                page.value = value
+
             async def dispose(self) -> None:
                 pass
 
@@ -395,12 +406,8 @@ class TestRecipeFillField(unittest.TestCase):
             def __init__(self, failure: type[Exception], failures: int) -> None:
                 self.value, self.failure, self.failures, self.attempts = '', failure, failures, 0
 
-            async def fill(self, selector: str, value: str, timeout: float) -> None:  # noqa: ASYNC109
-                self.attempts += 1
-                if self.attempts <= self.failures:
-                    self.value = value[:1]
-                    raise self.failure('a keydown was not acknowledged')
-                self.value = value
+            async def wait_for_selector(self, selector: str, timeout: float, visible: bool) -> FakeElement:  # ruff: ignore[async-function-with-timeout]
+                return FakeElement(self)
 
             async def find(self, selector: str) -> FakeElement:
                 return FakeElement(self)
@@ -728,7 +735,7 @@ class TestRecipeBrowser(unittest.TestCase):
         self.assertEqual(len(results), num)
         for i, result in sorted(results.items()):
             if isinstance(result, Exception):
-                raise AssertionError(f'download {i} failed: {result}') from result
+                raise AssertionError(f'download {i} failed: {result}') from result  # ruff: ignore[type-check-without-type-error]
             rendered, svg = result
             self.assertTrue(rendered, f'download {i} was not rendered')
             self.assertEqual(svg, TEST_SVG, f'download {i} got the wrong image')

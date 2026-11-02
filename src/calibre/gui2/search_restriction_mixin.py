@@ -542,8 +542,8 @@ class SearchRestrictionMixin:
                 self.search_based_vl_name = self._trim_restriction_name('*' + txt)
                 db.data.set_base_restriction_name(self.search_based_vl_name)
         elif library == self.search_based_vl_name:
-            db.data.set_base_restriction(self.search_based_vl)
-            db.data.set_base_restriction_name(self.search_based_vl_name)
+            db.data.set_base_restriction(self.search_based_vl)  # ty: ignore[invalid-argument-type]
+            db.data.set_base_restriction_name(self.search_based_vl_name)  # ty: ignore[invalid-argument-type]
         elif library in virt_libs:
             db.data.set_base_restriction(virt_libs[library])
             db.data.set_base_restriction_name(library)
@@ -617,6 +617,21 @@ class SearchRestrictionMixin:
         db.new_api.set_pref('virtual_libraries', virt_libs)
         if reapply and db.data.get_base_restriction_name() == name:
             self.apply_virtual_library('')
+        self.rebuild_vl_tabs()
+
+    def virtual_libraries_changed(self: Main, renamed=()):
+        "Update the GUI after the Virtual libraries were changed, for example, by calibredb through the Content server"
+        db = self.current_db
+        name = orig_name = db.data.get_base_restriction_name()
+        if name and name != self.search_based_vl_name:
+            for old, new in renamed:
+                if name == old:
+                    name = new
+            virt_libs = db.new_api.pref('virtual_libraries', {})
+            if name not in virt_libs:
+                self.apply_virtual_library('', update_tabs=False)
+            elif name != orig_name or virt_libs[name] != db.data.get_base_restriction():
+                self.apply_virtual_library(name, update_tabs=False)
         self.rebuild_vl_tabs()
 
     def _trim_restriction_name(self: Main, name):
@@ -758,7 +773,6 @@ if __name__ == '__main__':
     from calibre.gui2.preferences import init_gui
 
     app = Application([])
-    app
     gui = init_gui()
     d = CreateVirtualLibrary(gui, [])
     d.exec()

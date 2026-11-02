@@ -4,10 +4,10 @@
 import copy
 import re
 import weakref
-from collections import OrderedDict, namedtuple
+from collections import OrderedDict
 from itertools import groupby
 from operator import attrgetter, itemgetter
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 from qt.core import (
     QDialog,
@@ -52,7 +52,10 @@ def string_length(x):
 KEY = Qt.Key.Key_J
 MODIFIER = Qt.KeyboardModifier.MetaModifier if ismacos else Qt.KeyboardModifier.ControlModifier
 
-SnipKey = namedtuple('SnipKey', 'trigger syntaxes')
+
+class SnipKey(NamedTuple):
+    trigger: str
+    syntaxes: frozenset[str]
 
 
 def snip_key(trigger, *syntaxes):
@@ -134,7 +137,7 @@ class TabStop(str):
     takes_selection: bool
     parent: TabStop | None
 
-    def __new__(self, raw, start_offset, tab_stops, is_toplevel=True):  # noqa: PLW0211
+    def __new__(self, raw, start_offset, tab_stops, is_toplevel=True):  # ruff: ignore[bad-staticmethod-argument]
         if raw.endswith('}'):
             unescape = escape_funcs()[1]
             num, default = raw[2:-1].partition(':')[0::2]
@@ -314,7 +317,7 @@ class Template(list):
     has_tab_stops: bool
     active_tab_stop: EditorTabStop | None
 
-    def __new__(self, tab_stops):  # noqa: PLW0211
+    def __new__(self, tab_stops):  # ruff: ignore[bad-staticmethod-argument]
         self = list.__new__(self)
         self.left_most_ts = self.right_most_ts = None
         self.extend(tab_stops)
@@ -339,9 +342,7 @@ class Template(list):
         if not self.has_tab_stops:
             return False
         pos = cursor.position()
-        if self.left_most_position <= pos <= self.right_most_position:
-            return True
-        return False
+        return self.left_most_position <= pos <= self.right_most_position
 
     def jump_to_next(self, editor):
         if self.active_tab_stop is None:

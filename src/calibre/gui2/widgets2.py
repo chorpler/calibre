@@ -2,8 +2,8 @@
 # License: GPLv3 Copyright: 2013, Kovid Goyal <kovid at kovidgoyal.net>
 
 import weakref
-from collections.abc import Callable
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from qt.core import (
     QBrush,
@@ -67,6 +67,9 @@ from calibre.utils.config_base import tweaks
 from calibre.utils.date import UNDEFINED_DATE
 from calibre.utils.localization import _
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 
 class HistoryMixin:
     max_history_items = None
@@ -74,11 +77,13 @@ class HistoryMixin:
 
     _name: str
     history: list[str]
-    text: Callable[[], str]
-    setText: Callable[[str], None]
-    update_items_cache: Callable[[list[str]], None]
-    set_separator: Callable[[str | None], None]
-    enable_history_item_removal: Callable[[Callable[[str], None]], None]
+    if TYPE_CHECKING:
+
+        def text(self) -> str: ...
+        def setText(self, text: str, /) -> None: ...
+        def update_items_cache(self, complete_items: list[str], /) -> None: ...
+        def set_separator(self, sep: str | None, /) -> None: ...
+        def enable_history_item_removal(self, callback: Callable[[str], None], /) -> None: ...
 
     @property
     def store_name(self):

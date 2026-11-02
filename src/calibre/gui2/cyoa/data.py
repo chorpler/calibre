@@ -34,13 +34,14 @@ from calibre.ai.cyoa import PROTAGONIST_ID, GameState, GeneratedWorld, StoryStyl
 from calibre.ai.prefs import override_prefs_for_providers, plugins_for_purpose, update_prefs_for_provider
 from calibre.ai.structured import instantiate, spec_for_class
 from calibre.constants import __version__, config_dir
-from calibre.customize import AIProviderPlugin
 from calibre.utils.config import JSONConfig
 from calibre.utils.config_base import commit_data
 from calibre.utils.short_uuid import uuid4
 
 if TYPE_CHECKING:
     from unittest.suite import TestSuite
+
+    from calibre.customize import AIProviderPlugin
 else:
     TestSuite = object
 
@@ -136,7 +137,7 @@ class TextDisplaySettings(NamedTuple):
     max_line_width: int = DEFAULT_MAX_LINE_WIDTH  # in characters, zero means no limit
 
 
-def as_int(x: Any, default: int = 0) -> int:  # noqa: ANN401
+def as_int(x: Any, default: int = 0) -> int:
     # Values in the preferences file can be anything, it is user editable
     try:
         return int(x)
@@ -288,14 +289,14 @@ class SceneImage(NamedTuple):
     prompt: str = ''
 
 
-def validated_portrait(x: Any) -> dict[str, str] | None:  # noqa: ANN401
+def validated_portrait(x: Any) -> dict[str, str] | None:
     # A character portrait in stored form, or None when it is unusable.
     if isinstance(x, dict) and isinstance(mime := x.get('mime'), str) and isinstance(raw := x.get('data'), str) and mime and raw:
         return {'mime': mime, 'data': raw}
     return None
 
 
-def validated_portraits(x: Any) -> dict[str, dict[str, str]]:  # noqa: ANN401
+def validated_portraits(x: Any) -> dict[str, dict[str, str]]:
     # Character portraits keyed by character id, with unusable entries dropped.
     ans: dict[str, dict[str, str]] = {}
     if isinstance(x, dict):
@@ -451,7 +452,7 @@ def parse_game_file(raw: bytes, read_image: ImageReader, description: str) -> Lo
     except Exception as e:
         raise ValueError(f'Not a valid CYOA game file: {description}: {e}') from e
     if not isinstance(data, dict):
-        raise ValueError(f'Not a valid CYOA game file: {description}')
+        raise ValueError(f'Not a valid CYOA game file: {description}')  # ruff: ignore[type-check-without-type-error]
     version = data.get('version')
     if not isinstance(version, int) or version < 1:
         raise ValueError(f'Not a valid CYOA game file: {description}: {version!r} is not a game file version')

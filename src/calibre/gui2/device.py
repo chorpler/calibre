@@ -11,7 +11,7 @@ import time
 import traceback
 import weakref
 from threading import Event, Thread
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from qt.core import QAction, QActionGroup, QCoreApplication, QDialog, QDialogButtonBox, QEventLoop, QIcon, QMenu, QObject, QTimer, QVBoxLayout, pyqtSignal
 
@@ -60,11 +60,16 @@ from calibre.utils.localization import _, ngettext
 
 if TYPE_CHECKING:
     from calibre.gui2.ui import Main
+    from calibre.library.save_to_disk import Plugboards
 # }}}
 
 
 class DeviceJob(BaseJob):  # {{{
-    def __init__(self, func, done, job_manager, args=[], kwargs={}, description=''):
+    def __init__(self, func, done, job_manager, args=None, kwargs=None, description=''):
+        if kwargs is None:
+            kwargs = {}
+        if args is None:
+            args = []
         BaseJob.__init__(self, description)
         self.func = func
         self.callback_on_done = done
@@ -338,13 +343,13 @@ class DeviceManager(Thread):  # {{{
                 if cd is None:
                     self.connected_device_removed()
             else:
-                connected, detected_device = self.scanner.is_device_connected(self.connected_device, only_presence=True)
+                connected, detected_device = self.scanner.is_device_connected(connected_device, only_presence=True)
                 if not connected:
                     if DEBUG:
                         # Allow the device subsystem to output debugging info about
                         # why it thinks the device is not connected. Used, e.g.
                         # in the can_handle() method of the T1 driver
-                        self.scanner.is_device_connected(self.connected_device, only_presence=True, debug=True)
+                        self.scanner.is_device_connected(connected_device, only_presence=True, debug=True)
                     self.connected_device_removed()
         else:
             for dev in self.unmanaged_devices:
@@ -518,7 +523,11 @@ class DeviceManager(Thread):  # {{{
             except Exception:
                 pass
 
-    def create_job_step(self, func, done, description, to_job, args=[], kwargs={}):
+    def create_job_step(self, func, done, description, to_job, args=None, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
+        if args is None:
+            args = []
         job = DeviceJob(func, done, self.job_manager, args=args, kwargs=kwargs, description=description)
         self.job_manager.add_job(job)
         if (done is None or isinstance(done, FunctionDispatcher)) and (to_job is not None and to_job == self.current_job):
@@ -527,7 +536,11 @@ class DeviceManager(Thread):  # {{{
             self.jobs.put(job)
         return job
 
-    def create_job(self, func, done, description, args=[], kwargs={}):
+    def create_job(self, func, done, description, args=None, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
+        if args is None:
+            args = []
         return self.create_job_step(func, done, description, None, args, kwargs)
 
     def has_card(self):
@@ -661,7 +674,7 @@ class DeviceManager(Thread):  # {{{
             for f, mi in zip(files, metadata):
                 if isinstance(f, str):
                     ext = f.rpartition('.')[-1].lower()
-                    cpb = find_plugboard(device_name_for_plugboards(self.connected_device), ext, plugboards)
+                    cpb = find_plugboard(device_name_for_plugboards(self.connected_device), ext, cast('Plugboards', plugboards))
                     if ext:
                         try:
                             if DEBUG:
@@ -775,9 +788,7 @@ class DeviceManager(Thread):  # {{{
         self._call_request(name, 'set_option', opt_string, opt_value)
 
     def is_running(self, name):
-        if self._call_request(name, 'is_running'):
-            return True
-        return False
+        return bool(self._call_request(name, 'is_running'))
 
     def is_enabled(self, name):
         try:
@@ -1116,7 +1127,7 @@ class DeviceMixin:  # {{{
                         return
                 else:
                     title_sorts = db.all_field_for('sort', books_on_device)
-                    titles = sorted(db.all_field_for('title', books_on_device).items(), key=lambda x: title_sorts[x[0]])
+                    titles = sorted(db.all_field_for('title', books_on_device).items(), key=lambda x: title_sorts[x[0]])  # ty: ignore[no-matching-overload]
                     details = '\n'.join(title for book_id, title in titles)
                     if not question_dialog(
                         self,
@@ -1308,7 +1319,7 @@ class DeviceMixin:  # {{{
         if cv is not self.library_view:
             row = cv.currentIndex().row()
         for view in (self.memory_view, self.card_a_view, self.card_b_view):
-            view._model.deletion_done(job, job.failed)
+            view.device_model.deletion_done(job, job.failed)
         if job.failed:
             self.device_job_exception(job)
             return
@@ -1365,7 +1376,7 @@ class DeviceMixin:  # {{{
                     formats.append((
                         f,
                         _('%(num)i of %(total)i books') % dict(num=format_count[f], total=len(rows)),
-                        True if f in aval_out_formats else False,
+                        f in aval_out_formats,
                     ))
                 elif f in aval_out_formats:
                     formats.append((f, _('0 of %i books') % len(rows), True))

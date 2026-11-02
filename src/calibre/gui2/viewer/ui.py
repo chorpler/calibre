@@ -7,9 +7,10 @@ import re
 import sys
 import time
 import uuid
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 from hashlib import sha256
 from threading import Thread
+from typing import NamedTuple
 
 from qt.core import (
     QCursor,
@@ -77,8 +78,13 @@ def is_float(x):
 
 
 def dock_defs():
-    Dock = namedtuple('Dock', 'name title initial_area allowed_areas')
     ans = {}
+
+    class Dock(NamedTuple):
+        name: str
+        title: str
+        initial_area: Qt.DockWidgetArea
+        allowed_areas: Qt.DockWidgetArea
 
     def d(title, name, area, allowed=Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea):
         ans[name] = Dock(name + '-dock', title, area, allowed)
@@ -215,6 +221,7 @@ class EbookViewer(MainWindow):
         self.web_view.toggle_lookup.connect(self.toggle_lookup)
         self.web_view.quit.connect(self.quit)
         self.web_view.update_current_toc_nodes.connect(self.toc.update_current_toc_nodes)
+        self.web_view.update_current_toc_nodes.connect(self.search_widget.update_current_toc_nodes)
         self.web_view.toggle_full_screen.connect(self.toggle_full_screen)
         self.web_view.ask_for_open.connect(self.ask_for_open_from_js, type=Qt.ConnectionType.QueuedConnection)
         self.web_view.selection_changed.connect(self.lookup_widget.selected_text_changed, type=Qt.ConnectionType.QueuedConnection)

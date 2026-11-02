@@ -29,16 +29,48 @@ class VoiceConfig(NamedTuple):
     num_speakers: int
     sentence_delay: float = 0
     normalize_volume: bool = False
+    model_type: str = 'piper'  # piper or kokoro
+    # Used only for Kokoro models
+    speed: float = 1
+    style: bytes = b''
 
 
-def translate_voice_config(x: Any) -> VoiceConfig:
+class KokoroVoice(NamedTuple):
+    model_path: str
+    voice_path: str
+    lang_code: str  # Kokoro language code such as a for American English
+    lexicon_paths: tuple[str, str] | None = None  # gold and silver lexicons for English
+
+
+def create_kokoro_voice_config(voice: KokoroVoice, rate: float = 0, sentence_delay: float = 0.2) -> VoiceConfig:
+    from calibre.utils.tts.kokoro import kokoro_metadata, speed_from_rate
+
+    md = kokoro_metadata()
+    with open(voice.voice_path, 'rb') as f:
+        style = f.read()
+    return VoiceConfig(
+        espeak_voice_name=md['languages'][voice.lang_code]['espeak'],
+        sample_rate=md['sample_rate'],
+        phoneme_id_map={ord(k): [v] for k, v in md['vocab'].items() if len(k) == 1},
+        length_scale=1,
+        noise_scale=1,
+        noise_w=1,
+        num_speakers=1,
+        sentence_delay=sentence_delay,
+        model_type='kokoro',
+        speed=speed_from_rate(rate),
+        style=style,
+    )
+
+
+def translate_voice_config(x: dict[str, Any]) -> VoiceConfig:
     phoneme_id_map: dict[int, list[int]] = {}
     for s, pids in x.get('phoneme_id_map', {}).items():
         if s:
             phoneme_id_map.setdefault(ord(s[0]), []).extend(map(int, pids))
-    inf = x.get('inference')
+    inf = x.get('inference') or {}
 
-    def g(d, prop, defval):
+    def g(d: dict[str, Any], prop: str, defval: float) -> float:
         ans = d.get(prop, VoiceConfig)
         if ans is VoiceConfig:
             ans = defval
@@ -110,16 +142,29 @@ class SynthesisResult(NamedTuple):
     is_last: bool
 
 
-def simple_test():
+def simple_test() -> None:
     d = espeak_data_dir()
     if d and not os.path.exists(os.path.join(d, 'voices')):
         raise AssertionError(f'{d} does not contain espeak-ng data')
     piper.initialize(d)
+    # Some espeak-ng builds cannot resolve en-gb by name, ensure the language
+    # fallback selects the British voice rather than leaving no voice set.
+    piper.set_espeak_voice_by_name('en-gb')
+    if 'əʊ' not in piper.phonemize('hello')[0][0]:
+        raise AssertionError('Setting the en-gb espeak voice did not select a British English voice')
+    try:
+        piper.set_espeak_voice_by_name('nonexistent')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('Setting a non-existent espeak voice did not raise an error')
     piper.set_espeak_voice_by_name('en-us')
     if not piper.phonemize('simple test'):
         raise AssertionError('No phonemes returned by phonemize()')
+    if '^' not in piper.phonemize('my choice', '^')[0][0]:
+        raise AssertionError('No tie characters returned by phonemize()')
     if not isinstance(piper.gpu_providers(), tuple):
-        raise AssertionError('gpu_providers() did not return a tuple')
+        raise AssertionError('gpu_providers() did not return a tuple')  # ruff: ignore[type-check-without-type-error]
     if piper.current_backend() is not None:
         raise AssertionError('current_backend() is not None with no model loaded')
     piper.set_use_gpu(True)
@@ -130,7 +175,7 @@ ResultCallback = Callable[[SynthesisResult | None, Exception | None, str | None]
 
 
 class Piper(Thread):
-    def __init__(self):
+    def __init__(self) -> None:
         piper.initialize(espeak_data_dir())
         Thread.__init__(self, name='PiperSynth', daemon=True)
         self.commands = Queue()
@@ -138,6 +183,10 @@ class Piper(Thread):
         self._voice_id = 0
         self.lock = Lock()
         self.result_callback: ResultCallback = lambda *a: None
+        # Converts text to phonemes for Kokoro voices, only used in the synthesis thread
+        self.g2p: Callable[[str], list[str]] | None = None
+        # The lexicons used by self.g2p, only used in the synthesis thread
+        self.lexicon_paths: tuple[str, str] | None = None
         self.start()
 
     @property
@@ -152,7 +201,7 @@ class Piper(Thread):
             ans = self._voice_id
         return ans
 
-    def run(self):
+    def run(self) -> None:
         while True:
             voice_id, cmd = self.commands.get(True)
             if cmd is None:
@@ -166,7 +215,7 @@ class Piper(Thread):
 
                 self.result_callback(None, e, traceback.format_exc())
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         vid = self.increment_voice_id()
         self.commands.put((vid, None))
         self.join()
@@ -187,8 +236,43 @@ class Piper(Thread):
         self.commands.put((vid, partial(self._set_voice, cfg, model_path)))
         return cfg.sample_rate
 
-    def _set_voice(self, cfg, model_path):
+    def _release_g2p(self, lexicon_paths: tuple[str, str] | None = None) -> None:
+        # Free the memory used by cached lexicons unless they are needed by
+        # the new voice
+        self.g2p = None
+        if self.lexicon_paths != lexicon_paths:
+            from calibre.utils.tts.kokoro import load_lexicon
+
+            load_lexicon.cache_clear()
+            self.lexicon_paths = None
+
+    def _set_voice(self, cfg: VoiceConfig, model_path: str) -> None:
+        self._release_g2p()
         piper.set_voice(cfg, model_path)
+
+    def set_kokoro_voice(
+        self,
+        result_callback: ResultCallback,
+        voice: KokoroVoice,
+        rate: float = 0,
+        sentence_delay: float = 0.2,
+        as_16bit_samples: bool = True,
+    ) -> int:
+        from calibre.utils.tts.kokoro import kokoro_metadata
+
+        vid = self.increment_voice_id()
+        self.result_callback = result_callback
+        self.as_16bit_samples = as_16bit_samples
+        self.commands.put((vid, partial(self._set_kokoro_voice, voice, rate, sentence_delay)))
+        return kokoro_metadata()['sample_rate']
+
+    def _set_kokoro_voice(self, voice: KokoroVoice, rate: float, sentence_delay: float) -> None:
+        from calibre.utils.tts.kokoro import G2P
+
+        self._release_g2p(voice.lexicon_paths)
+        piper.set_voice(create_kokoro_voice_config(voice, rate, sentence_delay), voice.model_path)
+        self.g2p = G2P(voice.lang_code, voice.lexicon_paths)
+        self.lexicon_paths = voice.lexicon_paths
 
     def set_use_gpu(self, use_gpu: bool) -> None:
         # Not tied to a voice so that it is not discarded by cancel() or set_voice()
@@ -204,12 +288,15 @@ class Piper(Thread):
         self.increment_voice_id()
         self.result_callback = lambda *a: None
 
-    def synthesize(self, utterance_id: Any, text: str) -> None:
+    def synthesize(self, utterance_id: object, text: str) -> None:
         vid = self.voice_id
         self.commands.put((vid, partial(self._synthesize, vid, utterance_id, text)))
 
-    def _synthesize(self, voice_id: int, utterance_id: Any, text: str) -> None:
-        piper.start(text)
+    def _synthesize(self, voice_id: int, utterance_id: object, text: str) -> None:
+        if self.g2p is None:
+            piper.start(text)
+        else:
+            piper.start_phonemes(self.g2p(text))
         bytes_per_sample = 2 if self.as_16bit_samples else 4
         while True:
             audio_data, num_samples, sample_rate, is_last = piper.next(self.as_16bit_samples)
@@ -240,7 +327,7 @@ def global_piper_instance_if_exists() -> Piper | None:
     return _global_piper_instance
 
 
-def play_wav_data(wav_data: bytes):
+def play_wav_data(wav_data: bytes) -> None:
     from qt.core import QAudioOutput, QBuffer, QByteArray, QCoreApplication, QIODevice, QMediaPlayer, QUrl
 
     app = QCoreApplication([])
@@ -257,20 +344,20 @@ def play_wav_data(wav_data: bytes):
     app.exec()
 
 
-def play_pcm_data(pcm_data, sample_rate):
+def play_pcm_data(pcm_data: bytes, sample_rate: int) -> None:
     from calibre_extensions.ffmpeg import wav_header_for_pcm_data
 
     play_wav_data(wav_header_for_pcm_data(len(pcm_data), sample_rate) + pcm_data)
 
 
-def develop():
+def develop() -> None:
     from calibre.gui2.tts.piper import piper_cache_dir
 
     p = global_piper_instance()
     model_path = os.path.join(piper_cache_dir(), 'en_US-libritts-high.onnx')
     q = Queue()
 
-    def synthesized(*args):
+    def synthesized(*args: object) -> None:
         q.put(args)
 
     sample_rate = p.set_voice(synthesized, model_path + '.json', model_path, sentence_delay=0.3)

@@ -76,8 +76,9 @@ class Widget(QWidget):
         if hasattr(self, 'setupUi'):
             self.setupUi(self)  # type: ignore
         self._options = options
-        self._name = self.commit_name = self.COMMIT_NAME
-        assert self._name is not None
+        commit_name = self.COMMIT_NAME
+        assert commit_name is not None
+        self._name = self.commit_name = commit_name
         self._icon = QIcon.ic(self.ICON)
         for name in self._options:
             if not hasattr(self, 'opt_' + name):
@@ -94,7 +95,7 @@ class Widget(QWidget):
         defaults = load_defaults(self._name)
         defaults.merge_recommendations(get_option, OptionRecommendation.LOW, self._options)
 
-        if db is not None:
+        if db is not None and book_id is not None:  # book_id is None in bulk conversion, which has no specifics
             specifics = load_specifics(db, book_id)
             specifics.merge_recommendations(get_option, OptionRecommendation.HIGH, self._options, only_existing=True)
             defaults.update(specifics)
@@ -189,7 +190,7 @@ class Widget(QWidget):
         elif isinstance(g, RegexEdit):
             return g.regex or None
         else:
-            raise Exception(f"Can't get value from {type(g)}")
+            raise TypeError(f"Can't get value from {type(g)}")
 
     def gui_obj_changed(self, gui_obj, *args):
         self.changed_signal.emit()
@@ -219,7 +220,7 @@ class Widget(QWidget):
         elif isinstance(g, FontFamilyChooser):
             g.family_changed.connect(f)
         else:
-            raise Exception(f"Can't connect {type(g)}")
+            raise TypeError(f"Can't connect {type(g)}")
 
     def connect_gui_obj_handler(self, gui_obj, slot):
         raise NotImplementedError()

@@ -3,7 +3,6 @@
 
 import os
 import re
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from qt.core import (
@@ -54,6 +53,9 @@ from calibre.gui2.removable_history import enable_item_removal_for_combobox, rem
 from calibre.startup import connect_lambda
 from calibre.utils.config import XMLConfig, prefs
 from calibre.utils.localization import _, localize_user_manual_link
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 history = XMLConfig('history')
 
@@ -800,7 +802,9 @@ class CompleteLineEdit(EnLineEdit):  # {{{
     A QLineEdit that can complete parts of text separated by separator.
     """
 
-    def __init__(self, parent=None, complete_items=[], sep=',', space_before_sep=False):
+    def __init__(self, parent=None, complete_items=None, sep=',', space_before_sep=False):
+        if complete_items is None:
+            complete_items = []
         EnLineEdit.__init__(self, parent)
 
         self.separator = sep
@@ -1420,6 +1424,7 @@ if __name__ == '__main__':
     w = QTextEdit()
     s = PythonHighlighter(w)
     # w.setSyntaxHighlighter(s)
-    w.setText(open(__file__, 'rb').read().decode('utf-8'))
+    with open(__file__, 'rb') as f:
+        w.setText(f.read().decode('utf-8'))
     w.show()
     app.exec()

@@ -483,7 +483,7 @@ class ManageUserDictionaries(Dialog):
             return
         loc.update_recently_used()
         word = str(w.text())
-        lang = (loc.lang_codes or [canonicalize_lang(get_lang())])[0]
+        lang = (loc.lang_codes or [canonicalize_lang(get_lang()) or 'eng'])[0]
         if not word:
             return
         if (word, lang) not in self.current_dictionary.words:

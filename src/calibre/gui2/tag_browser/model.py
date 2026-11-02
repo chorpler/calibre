@@ -4,7 +4,8 @@
 import copy
 import os
 import traceback
-from collections import OrderedDict, namedtuple
+from collections import OrderedDict
+from typing import NamedTuple
 
 from qt.core import QAbstractItemModel, QFont, QIcon, QMimeData, QModelIndex, QObject, Qt, pyqtSignal
 
@@ -87,7 +88,7 @@ class TagTreeItem:  # {{{
             self.category_key = category_key or ''
             self.temporary = temporary
             self.tag = Tag(
-                data,
+                data,  # ty: ignore[invalid-argument-type]
                 category=category_key,
                 is_editable=category_key not in ['news', 'search', 'identifiers', 'languages'],
                 is_searchable=category_key != 'search',
@@ -322,7 +323,7 @@ class TagTreeItem:  # {{{
                     from calibre.gui2.ui import get_gui
 
                     db = get_gui(fail_if_absent=True).current_db.new_api
-                    link = None if not db.has_link_map(tag.category) else db.get_link_map(tag.category).get(tag.original_name)
+                    link = None if not db.has_link_map(tag.category) else db.get_link_map(tag.category).get(tag.original_name)  # ty: ignore[invalid-argument-type]
                     if link:
                         tt.append(_('Link: %s') % link)
                 return '\n'.join(tt)
@@ -402,7 +403,10 @@ class TagTreeItem:  # {{{
     # }}}
 
 
-FL_Interval = namedtuple('FL_Interval', ('first_chr', 'last_chr', 'length'))
+class FL_Interval(NamedTuple):
+    first_chr: str
+    last_chr: str
+    length: int
 
 
 def rename_only_in_vl_question(parent):
@@ -456,7 +460,10 @@ class TagsModel(QAbstractItemModel):  # {{{
         self.filter_categories_by = None
         self.collapse_model = 'disable'
         self.row_map = []
+        self.categories = OrderedDict()
+        self.hierarchical_categories = {}
         self.db = None
+        self.tree_is_built = False
         self.root_item = self.create_node(icon_map=self.icon_state_map)
         self._build_in_progress = False
         self.reread_collapse_model({}, rebuild=False)
@@ -547,10 +554,14 @@ class TagsModel(QAbstractItemModel):  # {{{
             self.collapse_model = 'disable'
         else:
             self.collapse_model = self.prefs['tags_browser_partition_method']
-        if rebuild:
+        if rebuild and self.tree_is_built:
             self.rebuild_node_tree(state_map)
 
-    def set_database(self, db, hidden_categories=None):
+    def set_database(self, db, hidden_categories=None, build_tree=True):
+        """
+        Use build_tree=False to not build the tree, for example because it is
+        not visible. ensure_tree_built() builds it.
+        """
         self.beginResetModel()
         self.value_icons = self.prefs['tags_browser_value_icons']
         hidden_cats = db.new_api.pref('tag_browser_hidden_categories', None)
@@ -570,7 +581,10 @@ class TagsModel(QAbstractItemModel):  # {{{
         # The versions of the categories of a different library say nothing
         # about whether the current sub-trees can be used again
         self.last_category_versions = {}
-        self._run_rebuild()
+        if build_tree:
+            self._run_rebuild()
+        else:
+            self._clear_tree()
         self.endResetModel()
 
     def reset_tag_browser(self):
@@ -585,7 +599,8 @@ class TagsModel(QAbstractItemModel):  # {{{
         for cat in hidden_cats:
             if cat in db.field_metadata:
                 self.hidden_categories.add(cat)
-        self._run_rebuild()
+        if self.tree_is_built:
+            self._run_rebuild()
         self.endResetModel()
 
     def _cached_notes_map(self, category):
@@ -633,7 +648,9 @@ class TagsModel(QAbstractItemModel):  # {{{
     def reset_notes_and_link_maps(self):
         self.link_map = self.notes_map = None
 
-    def rebuild_node_tree(self, state_map={}):
+    def rebuild_node_tree(self, state_map=None):
+        if state_map is None:
+            state_map = {}
         if self._build_in_progress:
             print('Tag browser build already in progress')
             traceback.print_stack()
@@ -648,9 +665,11 @@ class TagsModel(QAbstractItemModel):  # {{{
             self.endResetModel()
             self._build_in_progress = False
 
-    def _run_rebuild(self, state_map={}):
+    def _run_rebuild(self, state_map=None):
         # Take the fingerprint before building, so that a write that happens in
         # another thread while we build is not counted as already displayed
+        if state_map is None:
+            state_map = {}
         fingerprint = self.current_build_fingerprint()
         versions, signature = self.current_category_versions(), self.subtree_signature()
         self.reset_notes_and_link_maps()
@@ -678,6 +697,30 @@ class TagsModel(QAbstractItemModel):  # {{{
             old_node_map.clear()
         self.last_build_fingerprint = fingerprint
         self.last_category_versions, self.last_subtree_signature = versions, signature
+        self.tree_is_built = True
+
+    def _clear_tree(self):
+        old_node_map = self.node_map
+        self.node_map = {}
+        self.category_nodes = []
+        self.categories = OrderedDict()
+        self.row_map = []
+        self.hierarchical_categories = {}
+        self.root_item = self.create_node(icon_map=self.icon_state_map)
+        for node in old_node_map.values():
+            node.break_cycles()
+        old_node_map.clear()
+        self.reset_notes_and_link_maps()
+        self.last_build_fingerprint = None
+        self.tree_is_built = False
+
+    def ensure_tree_built(self):
+        """
+        Build the tree if it has not been built, see set_database(). Use before
+        using the tree, categories or nodes from outside the Tag browser.
+        """
+        if not self.tree_is_built:
+            self.rebuild_node_tree()
 
     def current_category_versions(self):
         db = self.db
@@ -926,7 +969,7 @@ class TagsModel(QAbstractItemModel):  # {{{
 
             category_child_map = {}
             fm = pn_db.field_metadata[key]
-            clear_rating = True if key not in self.categories_with_ratings and not fm['is_custom'] and not fm['kind'] == 'user' else False
+            clear_rating = key not in self.categories_with_ratings and not fm['is_custom'] and fm['kind'] != 'user'
             in_uc = fm['kind'] == 'user' and not is_gst
             tt = key if in_uc else None
 
@@ -935,7 +978,7 @@ class TagsModel(QAbstractItemModel):  # {{{
                 # in ICU's 'ordinal' for the first letter. In this case, the
                 # first letter can actually be more than one letter long.
                 fl_collapse_when = self.prefs['tags_browser_collapse_fl_at']
-                fl_collapse = True if fl_collapse_when > 1 else False
+                fl_collapse = fl_collapse_when > 1
                 intervals = []
                 cl_list = [None] * len(data[key])
                 last_ordnum = 0
@@ -1824,6 +1867,8 @@ class TagsModel(QAbstractItemModel):  # {{{
                 return True
             if val in sd_db.saved_search_names():
                 return self.show_error_after_event_loop_tick(_('Duplicate search name'), _('The saved search name %s is already used.') % val)
+            if '"' in val:
+                return self.show_error_after_event_loop_tick(_('Invalid search name'), _('Saved search names cannot contain " (quote) characters.'))
             self.use_position_based_index_on_next_recount = True
             sd_db.saved_search_rename(str(item.data(role) or ''), val)
             item.tag.name = val
@@ -2291,6 +2336,7 @@ class TagsModel(QAbstractItemModel):  # {{{
             if (equals_match and final_equals(name, txt)) or (not equals_match and final_contains(txt, name)):
                 self.path_found = path
                 return True
+            # ruff: ignore[reimplemented-builtin]
             for i, c in enumerate(tag_item.children):
                 if process_tag(depth + 1, self.createIndex(i, 0, c), c, start_path):
                     return True

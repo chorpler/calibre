@@ -12,6 +12,7 @@ from collections import OrderedDict
 from io import BytesIO
 from queue import Empty
 from threading import Thread
+from typing import cast
 
 from qt.core import QObject, Qt, pyqtSignal
 
@@ -158,7 +159,7 @@ class Adder(QObject):
         self.setParent(None)
         self.find_identical_books_data = self.merged_books = self.added_duplicate_info = self.pool = self.items = self.duplicates = self.pd = self.db = (
             self.dbref
-        ) = self.tdir = self.file_groups = self.scan_thread = None  # noqa: E501
+        ) = self.tdir = self.file_groups = self.scan_thread = None
         self.deleteLater()
 
     def tick(self):
@@ -444,7 +445,7 @@ class Adder(QObject):
         else:
             paths, opf, has_cover, duplicate_info = result.value
             try:
-                mi = OPF(BytesIO(opf), basedir=self.tdir, populate_spine=False, try_to_guess_cover=False).to_book_metadata()
+                mi = OPF(BytesIO(opf), basedir=cast('str', self.tdir), populate_spine=False, try_to_guess_cover=False).to_book_metadata()
                 mi.read_metadata_failed = False
             except Exception:
                 mi = self.report_metadata_failure(group_id, traceback.format_exc())
@@ -483,7 +484,7 @@ class Adder(QObject):
             return
 
         if self.add_formats_to_existing:
-            identical_book_ids = find_identical_books(mi, self.find_identical_books_data)
+            identical_book_ids = find_identical_books(mi, self.find_identical_books_data)  # ty: ignore[invalid-argument-type]
             if identical_book_ids:
                 try:
                     self.merge_books(mi, cover_path, paths, identical_book_ids)
@@ -586,6 +587,8 @@ class Adder(QObject):
         assert db is not None
         dbref = self.dbref
         assert dbref is not None
+        db_inst = dbref()
+        assert db_inst is not None
         for fmt, path in fmap.items():
             # The onimport plugins have already been run by the read metadata
             # worker
@@ -593,7 +596,7 @@ class Adder(QObject):
                 continue
             try:
                 if db.add_format(book_id, fmt, path, run_hooks=False, replace=replace):
-                    run_plugins_on_postimport(dbref(), book_id, fmt)
+                    run_plugins_on_postimport(db_inst, book_id, fmt)
                     fmt_map[fmt.lower()] = path
             except Exception:
                 a = self.report.append
@@ -601,7 +604,7 @@ class Adder(QObject):
                 a(_('Failed to add the file {0} to the book: {1}').format(path, mi.title))
                 a(_('With error:')), a(traceback.format_exc())
         if is_an_add:
-            run_plugins_on_postadd(dbref(), book_id, fmt_map)
+            run_plugins_on_postadd(db_inst, book_id, fmt_map)
 
     def process_duplicates(self):
         if self.duplicates:

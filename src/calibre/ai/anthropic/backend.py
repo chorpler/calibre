@@ -14,7 +14,6 @@ import json
 import os
 import posixpath
 import sys
-from collections.abc import Iterable, Iterator
 from contextlib import suppress
 from enum import Enum, auto
 from functools import lru_cache
@@ -25,6 +24,7 @@ from urllib.parse import urlparse, urlunparse
 from urllib.request import Request
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
     from unittest import TestSuite
 
     from calibre.ai.anthropic.config import ConfigWidget
@@ -64,7 +64,7 @@ PAUSE_TURN_TIME_LIMIT = 300
 WEB_SEARCH_TOOL = 'web_search_20250305'
 
 
-def pref(key: str, defval: Any = None) -> Any:  # noqa: ANN401
+def pref(key: str, defval: Any = None) -> Any:  # ruff: ignore[any-type]
     return pref_for_provider(AnthropicAI.name, key, defval)
 
 

@@ -124,7 +124,7 @@ class TagDelegate(QStyledItemDelegate):  # {{{
         lr.setRight(lr.right() * 2)
         text_rec = painter.boundingRect(lr, flags, text)
         hover = option.state & QStyle.StateFlag.State_MouseOver
-        is_search = True if item.type == TagTreeItem.TAG and item.tag.category == 'search' else False
+        is_search = item.type == TagTreeItem.TAG and item.tag.category == 'search'
         pen = painter.pen()
         pen.setColor(self.text_color(hover, option.palette))
         painter.setPen(pen)
@@ -315,6 +315,7 @@ class TagsView(QTreeView):  # {{{
         self.setAutoExpandDelay(500)
         self.pane_is_visible = False
         self.current_expansion = None
+        self.pending_expansion = None
         self.search_icon = QIcon.ic('search.png')
         self.search_copy_icon = QIcon.ic('search_copy_saved.png')
         self.user_category_icon = QIcon.ic('tb_folder.png')
@@ -433,9 +434,11 @@ class TagsView(QTreeView):  # {{{
         self._model.reread_collapse_model(self.get_state()[1])
 
     def set_database(self, db, alter_tb: AlterTagBrowser):
-        self._model.set_database(db)
+        # Building the tree is slow in a large library, so a hidden pane does
+        # not build it. recount() builds it when the pane is shown.
+        self.pending_expansion = None
+        self._model.set_database(db, build_tree=self.pane_is_visible)
         self.alter_tb = alter_tb
-        self.pane_is_visible = True  # because TagsModel.set_database did a recount
         self.setModel(self._model)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         pop = self.db.CATEGORY_SORTS.index(config['sort_tags_by'])
@@ -1876,7 +1879,7 @@ class TagsView(QTreeView):  # {{{
         ci = self.currentIndex()
         if not ci.isValid():
             ci = self.indexAt(QPoint(10, 10))
-        item_is_expanded = True if ci.isValid() and self.isExpanded(ci) else False
+        item_is_expanded = ci.isValid() and self.isExpanded(ci)
         use_pos = self._model.use_position_based_index_on_next_recount
         self._model.use_position_based_index_on_next_recount = False
         if use_pos:
@@ -1885,6 +1888,9 @@ class TagsView(QTreeView):  # {{{
             path = self._model.named_path_for_index(ci) if self.is_visible(ci) else None
         expanded_categories, state_map = self.get_state()
         self._model.rebuild_node_tree(state_map=state_map)
+        if self.pending_expansion is not None:
+            self.restore_expansion(self.pending_expansion)
+            return
         self.blockSignals(True)
         for category in expanded_categories:
             idx = self._model.index_for_category(category)
@@ -1947,6 +1953,12 @@ class TagsView(QTreeView):  # {{{
         super().currentChanged(current, previous)
 
     def restore_expansion(self, expansion):
+        if not self.pane_is_visible:
+            # Restored by recount() when the pane is shown. Until then it is the
+            # current expansion, so that it is saved again on shutdown.
+            self.pending_expansion = self.current_expansion = expansion
+            return
+        self.pending_expansion = None
         self.current_expansion = None
         if expansion is not None and len(expansion) == 2:
             idx = self._model.index_for_named_path(expansion[1])

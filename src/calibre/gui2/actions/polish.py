@@ -224,6 +224,7 @@ class Polish(QDialog):  # {{{
 
     @property
     def something_selected(self):
+        # ruff: ignore[reimplemented-builtin]
         for action in self.all_actions:
             if getattr(self, 'opt_' + action).isChecked():
                 return True
@@ -576,7 +577,6 @@ class PolishAction(InterfaceActionWithLibraryDrop):
 
 if __name__ == '__main__':
     app = QApplication([])
-    app
     from calibre.library import db
 
     d = Polish(db(), {1: {'EPUB'}, 2: {'AZW3'}})

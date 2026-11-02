@@ -405,10 +405,12 @@ class TagBrowserMixin:  # {{{
                 self.do_field_item_value_changed()
                 self.tags_view.recount()
 
-    def do_tag_item_delete(self: Main, category, item_id, orig_name, restrict_to_book_ids=None, children=[]):
+    def do_tag_item_delete(self: Main, category, item_id, orig_name, restrict_to_book_ids=None, children=None):
         """
         Delete an item from some category.
         """
+        if children is None:
+            children = []
         tag_names = []
         for child in children:
             if child.tag.is_editable:
@@ -574,9 +576,9 @@ class TagBrowserMixin:  # {{{
                 if rename_map:
                     affected_books, id_map = db.rename_items('authors', rename_map)
                 link_map = {id_map.get(author_id, author_id): new_link for author_id, old_author, new_author, new_sort, new_link in editor.result_val}
-                affected_books |= db.set_link_for_authors(link_map)
+                affected_books |= db.set_link_for_authors(link_map)  # ty: ignore[invalid-argument-type]
                 sort_map = {id_map.get(author_id, author_id): new_sort for author_id, old_author, new_author, new_sort, new_link in editor.result_val}
-                affected_books |= db.set_sort_for_authors(sort_map)
+                affected_books |= db.set_sort_for_authors(sort_map)  # ty: ignore[invalid-argument-type]
                 self.library_view._model.refresh_ids(affected_books, current_row=self.library_view.currentIndex().row())
             self.do_field_item_value_changed()
             self.tags_view.recount()
@@ -593,6 +595,7 @@ class TagBrowserMixin:  # {{{
         - 'toggle' to invert its visibility
         - 'is_visible' returns True if the category is currently visible, False otherwise
         """
+        self.tags_view._model.ensure_tree_built()
         if category not in self.tags_view._model.categories:
             raise ValueError(_('change_tb_category_visibility: category %s does not exist') % category)
         cats = self.tags_view.hidden_categories

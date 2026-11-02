@@ -2,9 +2,9 @@
 # License: GPLv3 Copyright: 2008, Kovid Goyal <kovid at kovidgoyal.net>
 
 import textwrap
-from collections.abc import Callable
 from contextlib import suppress
 from enum import IntEnum
+from typing import TYPE_CHECKING
 
 from qt.core import (
     QAction,
@@ -44,6 +44,9 @@ from calibre.gui2.widgets import CoverView
 from calibre.gui2.widgets2 import Dialog, HTMLDisplay
 from calibre.startup import connect_lambda
 from calibre.utils.localization import _
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class Cover(CoverView):
@@ -298,10 +301,10 @@ class BookInfo(QDialog, DropMixin):
             self.view = None
             db = get_gui(fail_if_absent=True).library_broker.get_library(library_path)
             dbn = db.new_api
-            if not dbn.has_id(book_id):
+            if book_id is None or not dbn.has_id(book_id):
                 raise ValueError(_("Book {} doesn't exist").format(book_id))
             mi = dbn.get_metadata(book_id, get_cover=False)
-            mi.cover_data = [None, dbn.cover(book_id, as_image=True)]
+            mi.set('cover_data', [None, dbn.cover(book_id, as_image=True)])  # a QImage for display
             mi.path = None
             mi.format_files = {}
             mi.formats = []
@@ -318,7 +321,7 @@ class BookInfo(QDialog, DropMixin):
                 db = get_gui(fail_if_absent=True).current_db
                 dbn = db.new_api
                 mi = dbn.get_metadata(book_id, get_cover=False)
-                mi.cover_data = [None, dbn.cover(book_id, as_image=True)]
+                mi.set('cover_data', [None, dbn.cover(book_id, as_image=True)])  # a QImage for display
                 mi.path = dbn.get_book_path(book_id, sep='/')
                 mi.format_files = dbn.format_files(book_id)
                 mi.marked = db.data.get_marked(book_id)
@@ -555,8 +558,8 @@ class BookInfo(QDialog, DropMixin):
             # changed
             return
         if self.dialog_number == DialogNumbers.Slaved:
-            self.previous_button.setEnabled(False if row == 0 else True)
-            self.next_button.setEnabled(False if row == view.model().rowCount(QModelIndex()) - 1 else True)
+            self.previous_button.setEnabled(row != 0)
+            self.next_button.setEnabled(row != view.model().rowCount(QModelIndex()) - 1)
             self.setWindowTitle(mi.title + ' ' + _('(the current book)'))
         elif self.library_id is not None:
             self.setWindowTitle(mi.title + ' ' + _('(from {})').format(self.library_id))

@@ -18,7 +18,7 @@ add_extra_css(def ():
         padding='0.6rem 0.75rem',
         border='var(--calibre-border-style-subtle)',
         border_radius='12px',
-        background_color='rgba(0,0,0,0.02)',
+        background_color='var(--calibre-color-faint-background)',
         font_style='normal',
         opacity='0.8'
     )
@@ -28,13 +28,13 @@ add_extra_css(def ():
         border='var(--calibre-border-style-subtle)',
         border_radius='14px',
         background_color=get_color('window-background'),
-        box_shadow='0 1px 2px rgba(0,0,0,0.06)',
+        box_shadow='var(--calibre-shadow-hairline)',
         cursor='pointer',
         overflow='hidden'
     )
     style += build_rule(sel + 'li:hover',
         background_color='var(--calibre-color-primary-light)',
-        box_shadow='0 8px 20px rgba(0,0,0,0.10)',
+        box_shadow='var(--calibre-shadow-lift)',
         transform='translateY(-1px)'
     )
     style += build_rule(sel + 'li:active', transform='translateY(0px)')
@@ -42,6 +42,16 @@ add_extra_css(def ():
         font_size=get_font_size('item-list-title'), font_weight='700')
     style += build_rule(sel + ' .item-subtitle',
         font_size=get_font_size('item-list-subtitle'), font_style='normal', opacity='0.78')
+    style += build_rule(sel + 'button.item-side-action',
+        display='block', margin='0', padding='0.5rem', border='0', background='none',
+        color='inherit', font='inherit', text_align='inherit')
+    style += build_rule(sel + 'button.item-side-action:not([aria-disabled="true"]):hover',
+        color=get_color('window-hover-foreground'))
+    style += build_rule(sel + 'button.item-side-action[aria-disabled="true"]',
+        cursor='default', opacity='0.4')
+    style += build_rule(sel + 'button.item-side-action[aria-disabled="true"]:active', transform='none')
+    style += build_rule(sel + 'button.item-side-action:focus-visible',
+        outline='2px solid ' + get_color('link-foreground'), outline_offset='-2px')
     sel += ' li > div:nth-child(1)'
     style += build_rule(sel,
         padding='0.85rem 0.95rem',
@@ -75,7 +85,69 @@ def side_action(action, ev):
     ev.stopPropagation(), ev.preventDefault()
     if action:
         li = ev.currentTarget.closest('li')
-        action(li)
+        action(li, ev.currentTarget)
+
+
+def is_visible(elem):
+    return bool(elem and elem.isConnected and elem.getClientRects().length)
+
+
+def side_action_buttons(row):
+    return [b for b in row.querySelectorAll('button.item-side-action') if b.getAttribute('aria-disabled') is not 'true']
+
+
+def focus_side_action_near(container, row_index, action_index=0, fallback=None):
+    # Move focus to a side action in the row at row_index, or the nearest
+    # visible row after or before it, then to fallback. Does nothing if focus
+    # is still on a visible element, so it never steals focus from the user.
+    active = document.activeElement
+    if active and active is not document.body and is_visible(active):
+        return False
+    ul = container if container.tagName is 'UL' else container.querySelector('ul')
+    rows = ul.children if ul else []
+    candidates = [i for i in range(row_index, rows.length)]
+    for i in range(min(row_index, rows.length) - 1, -1, -1):
+        candidates.push(i)
+    for i in candidates:
+        row = rows[i]
+        if is_visible(row):
+            buttons = side_action_buttons(row)
+            if buttons.length:
+                buttons[min(action_index, buttons.length - 1)].focus()
+                return True
+    if is_visible(fallback):
+        fallback.focus()
+        return True
+    return False
+
+
+def focused_side_action(container):
+    # Return the position of the focused side action in container, if any
+    active = document.activeElement
+    if not active or not active.classList or not active.classList.contains('item-side-action') or not container.contains(active):
+        return None
+    li = active.closest('li')
+    title = li.querySelector('.item-title')
+    return {
+        'row': Array.prototype.indexOf.call(li.parentNode.children, li),
+        'action': Array.prototype.indexOf.call(active.parentNode.children, active),
+        'title': title.textContent if title else None,
+    }
+
+
+def restore_side_action_focus(container, state):
+    # Put focus back on the side action of the same row (matched by title)
+    # after the list has been rebuilt, or on the nearest one if that row has
+    # gone or no longer has side actions
+    ul = container.querySelector('ul')
+    row_index = state.row
+    if state.title is not None:
+        for i, row in enumerate(ul.children):
+            title = row.querySelector('.item-title')
+            if title and title.textContent is state.title:
+                row_index = i
+                break
+    focus_side_action_near(ul, row_index, state.action)
 
 
 def add_classes(elem, class_names):
@@ -86,10 +158,11 @@ def add_classes(elem, class_names):
 
 def build_list(container, items, subtitle):
     c = container
+    focus_state = focused_side_action(c)
     clear(c)
     c.classList.add(CLASS_NAME)
     if subtitle:
-        c.appendChild(E.p(subtitle, style='font-style:normal; font-weight:700; padding: 1em 1ex; border-bottom: solid 1px currentColor'))
+        c.appendChild(E.p(subtitle, style='font-style:normal; font-weight:700; padding: 1em 1ex; border-bottom: var(--calibre-border-style-strong)'))
     ul = E.ul()
     c.appendChild(ul)
     has_icons = False
@@ -139,13 +212,17 @@ def build_list(container, items, subtitle):
                 style='display: flex; align-items: center; margin-left: 0.5rem'
             ))
             for x in item.side_actions:
-                li.lastChild.appendChild(E.div(
-                    class_='simple-link',
-                    style='padding: 0.5rem',
-                    title=x.tooltip or '',
+                # Use aria-disabled rather than disabled so that the click
+                # handler still runs and stops clicks reaching the row action
+                li.lastChild.appendChild(E.button(
+                    type='button', class_='simple-link item-side-action',
+                    aria_disabled='false' if x.action else 'true',
+                    title=x.tooltip or '', aria_label=x.tooltip or '',
                     onclick=side_action.bind(None, x.action),
                     svgicon(x.icon)
                 ))
+    if focus_state:
+        restore_side_action_focus(c, focus_state)
 
 
 def create_side_action(icon, action=None, tooltip=None):

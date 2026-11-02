@@ -8,14 +8,13 @@ import math
 import random
 import struct
 import weakref
-from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from functools import lru_cache, partial
 from operator import attrgetter
 from queue import LifoQueue, ShutDown
 from threading import Event, RLock, Thread, current_thread
 from time import monotonic
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from qt.core import (
     QAbstractItemView,
@@ -65,7 +64,6 @@ from qt.core import (
 from xxhash import xxh3_64_intdigest
 
 from calibre import fit_image
-from calibre.db.cache import Cache
 from calibre.ebooks.metadata import authors_to_string, rating_to_stars
 from calibre.gui2 import config, gprefs, qapplication_or_fail, resolve_bookshelf_color
 from calibre.gui2.library.alternate_views import (
@@ -80,7 +78,6 @@ from calibre.gui2.library.alternate_views import (
     setup_dnd_interface,
 )
 from calibre.gui2.library.caches import CoverThumbnailCache, Thumbnailer
-from calibre.gui2.library.models import BooksModel
 from calibre.gui2.momentum_scroll import MomentumScrollMixin
 from calibre.gui2.palette import dark_palette, light_palette
 from calibre.utils.formatter import TEMPLATE_ERROR
@@ -91,6 +88,12 @@ from calibre.utils.localization import _, lang_map
 from calibre.utils.resources import get_image_path as I
 from calibre_extensions.imageops import dominant_color
 from calibre_extensions.progress_indicator import contrast_ratio, utf16_slice
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Iterator
+
+    from calibre.db.cache import Cache
+    from calibre.gui2.library.models import BooksModel
 
 # }}}
 
@@ -989,11 +992,11 @@ class CaseItem:
 
 
 def get_grouped_iterator(db: Cache, book_ids_iter: Iterable[int], field_name: str = '') -> Iterator[tuple[str, int | Iterable[int]]]:
-    formatter = lambda x: x  # noqa: E731
+    formatter = lambda x: x  # ruff: ignore[lambda-assignment]
     fm = db.field_metadata
     sort_key = numeric_sort_key
-    get_books_in_group: Callable[[int], set[int]] | Callable[[tuple[int, int]], set[int]] = lambda group: db.books_for_field(field_name, group)  # noqa: E731
-    get_field_id_map: Callable[[], dict[int | tuple[int, int], str | tuple[int, int] | int]] = lambda: db.get_id_map(field_name)  # noqa: E731
+    get_books_in_group: Callable[[int], set[int]] | Callable[[tuple[int, int]], set[int]] = lambda group: db.books_for_field(field_name, group)  # ruff: ignore[lambda-assignment]
+    get_field_id_map: Callable[[], dict[int | tuple[int, int], str | tuple[int, int] | int]] = lambda: db.get_id_map(field_name)  # ruff: ignore[lambda-assignment]  # ty: ignore[invalid-assignment]
     sort_map = {book_id: i for i, book_id in enumerate(book_ids_iter)}
     all_book_ids = frozenset(sort_map)
     ungrouped_name = all_groupings().get(field_name, _('Unknown'))
@@ -1015,15 +1018,15 @@ def get_grouped_iterator(db: Cache, book_ids_iter: Iterable[int], field_name: st
                     return au
 
             sort_key = {au: gas(aid, au) for aid, au in field_id_map.items()}.__getitem__
-            get_field_id_map = lambda: field_id_map  # noqa: E731
+            get_field_id_map = lambda: field_id_map  # ruff: ignore[lambda-assignment]  # ty: ignore[invalid-assignment]
             del gas
         case 'languages':
             lm = lang_map()
-            formatter = lambda x: lm.get(x, x)  # noqa: E731
-            sort_key = lambda x: numeric_sort_key(formatter(x))  # noqa: E731
+            formatter = lambda x: lm.get(x, x)  # ruff: ignore[lambda-assignment]
+            sort_key = lambda x: numeric_sort_key(formatter(x))  # ruff: ignore[lambda-assignment]
         case field_name if dt == 'rating':
             formatter = rating_to_stars
-            sort_key = lambda x: -x  # noqa: E731
+            sort_key = lambda x: -x  # ruff: ignore[lambda-assignment]
             ungrouped_name = _('Unrated')
         case field_name if dt == 'datetime':
             df = fm[field_name].get('display', {}).get('date_format') or 'dd MMM yyyy'
@@ -1031,24 +1034,24 @@ def get_grouped_iterator(db: Cache, book_ids_iter: Iterable[int], field_name: st
                 lsys = QLocale.system().monthName
                 month_map = db.books_by_month(field=field_name, restrict_to_books=all_book_ids)
                 get_books_in_group = month_map.__getitem__
-                get_field_id_map = lambda: {x: x for x in month_map}  # noqa: E731
-                sort_key = lambda x: (-x[0], -x[1])  # noqa: E731
-                formatter = lambda x: f'{lsys(x[1], QLocale.FormatType.ShortFormat)} {x[0]}' if x[0] > UNDEFINED_DATE.year else ungrouped_name  # noqa: E731
+                get_field_id_map = lambda: {x: x for x in month_map}  # ruff: ignore[lambda-assignment]
+                sort_key = lambda x: (-x[0], -x[1])  # ruff: ignore[lambda-assignment]
+                formatter = lambda x: f'{lsys(x[1], QLocale.FormatType.ShortFormat)} {x[0]}' if x[0] > UNDEFINED_DATE.year else ungrouped_name  # ruff: ignore[lambda-assignment]
             else:
                 year_map = db.books_by_year(field=field_name, restrict_to_books=all_book_ids)
                 get_books_in_group = year_map.__getitem__
-                get_field_id_map = lambda: {x: x for x in year_map}  # noqa: E731
-                sort_key = lambda x: -x  # noqa: E731
-                formatter = lambda x: str(x) if x > UNDEFINED_DATE.year else ungrouped_name  # noqa: E731
+                get_field_id_map = lambda: {x: x for x in year_map}  # ruff: ignore[lambda-assignment]
+                sort_key = lambda x: -x  # ruff: ignore[lambda-assignment]
+                formatter = lambda x: str(x) if x > UNDEFINED_DATE.year else ungrouped_name  # ruff: ignore[lambda-assignment]
 
     field_id_map = get_field_id_map()
     yield '', len(field_id_map)
     seen = set()
-    for group in sorted(field_id_map, key=lambda fid: sort_key(field_id_map[fid])):
+    for group in sorted(field_id_map, key=lambda fid: sort_key(field_id_map[fid])):  # ty: ignore[invalid-argument-type]
         books_in_group = (get_books_in_group(group) & all_book_ids) - seen  # type: ignore
         if books_in_group:
             seen |= books_in_group
-            yield formatter(field_id_map[group]), sorted(books_in_group, key=sort_map.__getitem__)
+            yield formatter(field_id_map[group]), sorted(books_in_group, key=sort_map.__getitem__)  # ty: ignore[invalid-argument-type] formatter matches the field's id map values
     if ungrouped_name and (leftover := all_book_ids - seen):
         yield ungrouped_name, sorted(leftover, key=sort_map.__getitem__)
 
@@ -1083,12 +1086,12 @@ def get_spine_width(
     match spine_size_template:
         case '{pages}' | 'pages':
             pages = db.field_for('pages', book_id, 0)
-            if pages > 0:
-                ans = linear(width_from_pages(pages))
+            if pages > 0:  # ty: ignore[unsupported-operator]
+                ans = linear(width_from_pages(pages))  # ty: ignore[invalid-argument-type]
             else:
-                ans = linear(width_from_size(db.field_for('size', book_id, 0)))
+                ans = linear(width_from_size(db.field_for('size', book_id, 0)))  # ty: ignore[invalid-argument-type]
         case '{size}' | 'size':
-            ans = linear(width_from_size(db.field_for('size', book_id, 0)))
+            ans = linear(width_from_size(db.field_for('size', book_id, 0)))  # ty: ignore[invalid-argument-type]
         case '{random}' | 'random':
             # range: 0.25-0.75
             ans = linear((25 + (random_from_id(book_id, limit=51))) / 100)
@@ -1101,7 +1104,7 @@ def get_spine_width(
             if ans < 0:
                 with suppress(Exception):
                     mi = db.get_proxy_metadata(book_id)
-                    rslt = mi.formatter.safe_format(spine_size_template, mi, 'template error', mi, template_cache=template_cache)
+                    rslt = mi.formatter.safe_format(spine_size_template, mi, 'template error', mi, template_cache=template_cache)  # ty: ignore[invalid-argument-type]
                     ans = linear(float(rslt))
     if ans <= 0:
         ans = lc.default_spine_width
@@ -1197,7 +1200,7 @@ class BookCase(QObject):
 
     def invalidate(
         self,
-        layout_constraints: LayoutConstraints = LayoutConstraints(),
+        layout_constraints: LayoutConstraints | None = None,
         model: BooksModel | None = None,
         group_field_name: str = '',
         min_line_height: int = 0,
@@ -1210,7 +1213,7 @@ class BookCase(QObject):
             self.height = 0
             self.using_page_counts = False
             self.num_of_books_that_need_pages_counted = 0
-            self.layout_constraints = layout_constraints
+            self.layout_constraints = layout_constraints or LayoutConstraints()
             self.book_id_visual_order_map: dict[int, int] = {}
             self.book_ids_in_visual_order = []
             self.book_id_to_item_map: dict[int, ShelfItem] = {}
@@ -1730,13 +1733,13 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
             return ''
         match template:
             case '{title}':
-                return db.field_for('title', book_id)
+                return db.field_for('title', book_id)  # ty: ignore[invalid-return-type]
             case '{author_sort}':
-                return db.field_for('author_sort', book_id)
+                return db.field_for('author_sort', book_id)  # ty: ignore[invalid-return-type]
             case '{author}' | '{authors}':
                 return authors_to_string(db.field_for('authors', book_id))
             case '{sort}' | '{title_sort}':
-                return db.field_for('sort', book_id)
+                return db.field_for('sort', book_id)  # ty: ignore[invalid-return-type]
         mi = db.get_proxy_metadata(book_id)
         rslt = mi.formatter.safe_format(template, mi, TEMPLATE_ERROR, mi, column_name=column_name, template_cache=m.bookshelf_template_cache)
         return rslt or ''
@@ -2167,13 +2170,13 @@ class BookshelfView(MomentumScrollMixin, QAbstractScrollArea):
         painter.drawRect(spine_rect.adjusted(gap, gap, -gap, -gap))
         painter.restore()
 
-    @lru_cache(maxsize=128)
+    @lru_cache(maxsize=128)  # ruff: ignore[cached-instance-method]
     def get_sized_font(self, sz: float = 9, for_divider: bool = False) -> tuple[QFont, QFontMetricsF, QFontInfo]:
         font = QFont(self.divider_font if for_divider else self.spine_font)
         font.setPointSizeF(sz)
         return font, QFontMetricsF(font), QFontInfo(font)
 
-    @lru_cache(maxsize=4096)
+    @lru_cache(maxsize=4096)  # ruff: ignore[cached-instance-method]
     def get_text_metrics(
         self,
         first_line: str,

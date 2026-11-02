@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # License: GPLv3 Copyright: 2008, Kovid Goyal <kovid at kovidgoyal.net>
 
+from typing import cast
+
 from qt.core import QDialog, QDialogButtonBox, QFormLayout, QIcon, QLabel, QLineEdit, QListWidget, QPlainTextEdit, Qt, QVBoxLayout
 
 from calibre import prepare_string_for_xml
@@ -66,6 +68,8 @@ class AddSavedSearch(Dialog):
         name = self.sname.text().strip()
         if not name:
             return error_dialog(self, _('No search name'), _('You must specify a name for the Saved search'), show=True)
+        if '"' in name:
+            return error_dialog(self, _('Invalid search name'), _('Saved search names cannot contain " (quote) characters.'), show=True)
         expression = self.search.toPlainText().strip()
         if not expression:
             return error_dialog(
@@ -220,7 +224,7 @@ class SavedSearchEditor(Dialog):
             t = self.searches[n]
         else:
             t = ''
-        self.desc.setText('<p><b>{}</b>: '.format(_('Search expression')) + prepare_string_for_xml(t))
+        self.desc.setText('<p><b>{}</b>: '.format(_('Search expression')) + prepare_string_for_xml(cast('str', t)))
 
     def accept(self):
         commit_searches(self.searches)

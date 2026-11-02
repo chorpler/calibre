@@ -6,11 +6,10 @@ import re
 import sys
 import weakref
 from collections import defaultdict
-from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from functools import partial
 from threading import Thread
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from html5_parser import parse
 from lxml import html
@@ -87,6 +86,9 @@ from calibre.utils.config import tweaks
 from calibre.utils.filenames import make_long_path_useable
 from calibre.utils.imghdr import what
 from calibre.utils.localization import _
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 # Cleanup Qt markup {{{
 
@@ -1419,7 +1421,7 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
 
         # Insert blocks and fragments. Handle first block specially to avoid unwanted new block
         for idx, blk in enumerate(blocks):
-            blk_fmt = cast(QTextBlockFormat, blk['blockFormat'])
+            blk_fmt = cast('QTextBlockFormat', blk['blockFormat'])
             list_fmt = blk['listFormat']
 
             # Determine if original first block was partial (selection started mid-block).
@@ -1432,9 +1434,9 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
             if isinstance(list_fmt, QTextListFormat):
                 editcur.createList(list_fmt)
 
-            fragment_text = func(cast(str, blk['fragment_text']))
+            fragment_text = func(cast('str', blk['fragment_text']))
             # insert the fragments for this block, preserving char formats
-            for start_pos, length, ch_fmt in cast(list[tuple[int, int, QTextCharFormat]], blk['fragments']):
+            for start_pos, length, ch_fmt in cast('list[tuple[int, int, QTextCharFormat]]', blk['fragments']):
                 if start_pos >= len(fragment_text):
                     break
                 # Convert selected fragment text

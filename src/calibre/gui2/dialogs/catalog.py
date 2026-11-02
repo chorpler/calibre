@@ -56,6 +56,8 @@ class Catalog(QDialog, Ui_Dialog):
                     continue
             else:
                 # Load dynamic tab
+                # Set by CatalogPlugin.initialize() for non builtin plugins
+                assert plugin.resources_path is not None
                 form = os.path.join(plugin.resources_path, f'{name}.ui')
                 klass = os.path.join(plugin.resources_path, f'{name}.py')
                 compiled_form = os.path.join(plugin.resources_path, f'{name}_ui.py')
@@ -72,7 +74,8 @@ class Catalog(QDialog, Ui_Dialog):
                         compileUi(form, buf)
                         dat = buf.getvalue()
                         dat = re.compile(r'QtGui.QApplication.translate\(.+?,\s+"(.+?)(?<!\\)",.+?\)', re.DOTALL).sub(r'_("\1")', dat)
-                        open(compiled_form, 'wb').write(dat.encode('utf-8'))
+                        with open(compiled_form, 'wb') as f:
+                            f.write(dat.encode('utf-8'))
 
                     # Import the dynamic PluginWidget() from .py file provided in plugin.zip
                     try:

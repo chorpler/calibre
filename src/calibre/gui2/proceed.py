@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 # License: GPLv3 Copyright: 2012, Kovid Goyal <kovid@kovidgoyal.net>
 
-from collections import namedtuple
-from typing import cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from qt.core import (
     QAbstractScrollArea,
@@ -39,14 +38,32 @@ from calibre.constants import __version__
 from calibre.gui2.dialogs.message_box import ViewLog
 from calibre.utils.localization import _
 
-Question = namedtuple(
-    'Question',
-    'payload callback cancel_callback '
-    'title msg html_log log_viewer_title log_is_file det_msg '
-    'show_copy_button checkbox_msg checkbox_checked action_callback '
-    'action_label action_icon focus_action show_det show_ok icon '
-    'log_viewer_unique_name auto_hide_after',
-)
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+
+class Question(NamedTuple):
+    payload: Any
+    callback: Callable[[Any], bool | None]
+    cancel_callback: Callable[[Any], bool | None] | None
+    title: str
+    msg: str
+    html_log: str
+    log_viewer_title: str
+    log_is_file: bool
+    det_msg: str
+    show_copy_button: bool
+    checkbox_msg: str | None
+    checkbox_checked: bool
+    action_callback: Callable[[Any], bool | None] | None
+    action_label: str | None
+    action_icon: QIcon | None
+    focus_action: bool
+    show_det: bool
+    show_ok: bool
+    icon: QIcon | None
+    log_viewer_unique_name: str | None
+    auto_hide_after: int
 
 
 class Icon(QWidget):
@@ -184,7 +201,7 @@ class ProceedQuestion(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         for child in self.findChildren(QWidget):
             child.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setFocusProxy(cast(QWidget | None, self.parent()))
+        self.setFocusProxy(cast('QWidget | None', self.parent()))
         self.resize_timer = t = QTimer(self)
         t.setSingleShot(True), t.setInterval(100), t.timeout.connect(self.parent_resized)
 
@@ -358,7 +375,7 @@ class ProceedQuestion(QWidget):
         for child in self.findChildren(QWidget):
             child.update()
             if hasattr(child, 'viewport'):
-                vp = cast(QAbstractScrollArea, child).viewport()
+                vp = cast('QAbstractScrollArea', child).viewport()
                 if vp is not None:
                     vp.update()
 

@@ -221,7 +221,7 @@ class PluginWidget(QWidget, Ui_Form):
 
         results = _('No genres will be excluded')
 
-        regex = str(getattr(self, 'exclude_genre').text()).strip()
+        regex = str(self.exclude_genre.text()).strip()
         if not regex:
             self.exclude_genre_results.clear()
             self.exclude_genre_results.setText(results)
@@ -249,7 +249,7 @@ class PluginWidget(QWidget, Ui_Form):
                 else:
                     results = _truncated_results(excluded_tags)
         finally:
-            if False and self.DEBUG:
+            if False and self.DEBUG:  # ruff: ignore[expr-and-false]
                 print(f'exclude_genre_changed(): {results}')
             self.exclude_genre_results.clear()
             self.exclude_genre_results.setText(results)
@@ -551,7 +551,7 @@ class PluginWidget(QWidget, Ui_Form):
         except Exception:
             opts_dict['output_profile'] = ['default']
 
-        if False and self.DEBUG:
+        if False and self.DEBUG:  # ruff: ignore[expr-and-false]
             print('opts_dict')
             for opt in sorted(opts_dict.keys(), key=sort_key):
                 print(f' {opt}: {opts_dict[opt]!r}')
@@ -1358,7 +1358,7 @@ class PrefixRules(GenericRulesTable):
         data = self.create_blank_row_data()
         data['ordinal'] = row
         _prefix_item = self.item(row, int(self.COLUMNS['ENABLED']['ordinal']))
-        assert isinstance(_prefix_item, QCheckBox)
+        assert _prefix_item is not None
         data['enabled'] = _prefix_item.checkState() == Qt.CheckState.Checked
         _pfx_name_w = self.cellWidget(row, int(self.COLUMNS['NAME']['ordinal']))
         assert isinstance(_pfx_name_w, QLineEdit)

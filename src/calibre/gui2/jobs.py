@@ -262,12 +262,13 @@ class JobManager(QAbstractTableModel, AdaptSQP):  # {{{
         return False
 
     def has_jobs(self):
-        for job in self.jobs:
-            if job.is_running:
-                return True
-        return False
+        return any(job.is_running for job in self.jobs)
 
-    def run_job(self, done, name, args=[], kwargs={}, description='', core_usage=1):
+    def run_job(self, done, name, args=None, kwargs=None, description='', core_usage=1):
+        if kwargs is None:
+            kwargs = {}
+        if args is None:
+            args = []
         job = ParallelJob(name, description, done, args=args, kwargs=kwargs)
         job.core_usage = core_usage
         self.add_job(job)

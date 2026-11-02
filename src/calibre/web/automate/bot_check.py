@@ -29,10 +29,12 @@ class rather than of anything the recipe controls.
 """
 
 import time
-from collections.abc import Callable
 from functools import wraps
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.error import URLError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # The statuses an interstitial is served with: 403 is what the bot check itself
 # answers with and 429 is what a service that thinks we are asking too often
@@ -54,7 +56,7 @@ def bot_check_retrier(fetch: Callable[..., Any], retries: int = BOT_CHECK_RETRIE
     """
 
     @wraps(fetch)
-    def retrying(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+    def retrying(*args: Any, **kwargs: Any) -> Any:  # ruff: ignore[any-type]
         for _ in range(retries - 1):
             try:
                 return fetch(*args, **kwargs)
@@ -83,7 +85,7 @@ def retry_bot_checks[B](br: B, retries: int = BOT_CHECK_RETRIES, delay: float = 
     if callable(clone):
 
         @wraps(clone)
-        def cloning(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        def cloning(*args: Any, **kwargs: Any) -> Any:  # ruff: ignore[any-type]
             return retry_bot_checks(clone(*args, **kwargs), retries, delay)
 
         setattr(br, 'clone_browser', cloning)

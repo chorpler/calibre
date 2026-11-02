@@ -6,6 +6,7 @@ import json
 import os
 import re
 from functools import lru_cache, partial
+from typing import TYPE_CHECKING, cast
 from urllib.parse import quote
 
 from qt.core import (
@@ -43,8 +44,8 @@ from qt.core import (
 
 from calibre import prepare_string_for_xml
 from calibre.constants import builtin_colors_dark, builtin_colors_light, builtin_decorations
+from calibre.db.annotations import ChapterGroup as ChapterGroupBase
 from calibre.db.backend import FTSQueryError
-from calibre.db.cache import Cache
 from calibre.ebooks.metadata import authors_to_sort_string, authors_to_string, fmt_sidx, rating_to_stars
 from calibre.gui2 import UNDEFINED_QDATETIME, Application, choose_save_file, config, error_dialog, gprefs, is_dark_theme, qapplication_or_fail, safe_open_url
 from calibre.gui2.dialogs.confirm_delete import confirm
@@ -57,6 +58,9 @@ from calibre.utils.date import qt_from_dt
 from calibre.utils.icu import primary_sort_key
 from calibre.utils.localization import _, ngettext, pgettext
 
+if TYPE_CHECKING:
+    from calibre.db.cache import Cache
+
 
 def render_timestamp(ts):
     date = QDateTime.fromString(ts, Qt.DateFormat.ISODate).toLocalTime()
@@ -65,29 +69,6 @@ def render_timestamp(ts):
 
 
 # rendering {{{
-def render_highlight_as_text(hl, lines, as_markdown=False, link_prefix=None):
-    lines.append(hl['highlighted_text'])
-    date = render_timestamp(hl['timestamp'])
-    if as_markdown and link_prefix:
-        cfi = hl['start_cfi']
-        spine_index = (1 + hl['spine_index']) * 2
-        link = (link_prefix + quote(f'epubcfi(/{spine_index}{cfi})')).replace(')', '%29')
-        date = f'[{date}]({link})'
-    if as_markdown:
-        date = f'*{date}*'
-    lines.append(date)
-    notes = hl.get('notes')
-    if notes:
-        lines.append('')
-        lines.append(notes)
-    lines.append('')
-    if as_markdown:
-        lines.append('-' * 20)
-    else:
-        lines.append('───')
-    lines.append('')
-
-
 def get_annotation_style_classes(style):
     stype = style.get('type')
     skind = style.get('kind')
@@ -140,21 +121,6 @@ def render_highlight_as_html(hl, lines, link_prefix=None):
     lines.append('<hr>')
 
 
-def render_bookmark_as_text(b, lines, as_markdown=False, link_prefix=None):
-    lines.append(b['title'])
-    date = render_timestamp(b['timestamp'])
-    if as_markdown and link_prefix and b['pos_type'] == 'epubcfi':
-        link = (link_prefix + quote(b['pos'])).replace(')', '%29')
-        date = f'[{date}]({link})'
-    lines.append(date)
-    lines.append('')
-    if as_markdown:
-        lines.append('-' * 20)
-    else:
-        lines.append('───')
-    lines.append('')
-
-
 def render_bookmark_as_html(b, lines, link_prefix=None):
     lines.append('<div class="calibre-annotation calibre-bookmark">')
     lines.append(f'<strong>{prepare_string_for_xml(b.get("title", ""))}</strong><br>')
@@ -180,39 +146,9 @@ def color_contrasting(hex_color):
     return '#{:02x}{:02x}{:02x}'.format(*contrasting_rgb)
 
 
-class ChapterGroup:
-    def __init__(self, title='', level=0):
-        self.title = title
-        self.subgroups = {}
-        self.annotations = []
-        self.level = level
-
-    def add_annot(self, a):
-        titles = a.get('toc_family_titles', (_('Unknown chapter'),))
-        node = self
-        for title in titles:
-            node = node.group_for_title(title)
-        node.annotations.append(a)
-
-    def group_for_title(self, title):
-        ans = self.subgroups.get(title)
-        if ans is None:
-            ans = ChapterGroup(title, self.level + 1)
-            self.subgroups[title] = ans
-        return ans
-
-    def render_as_text(self, lines, as_markdown, link_prefix):
-        if self.title:
-            lines.append('#' * self.level + ' ' + self.title)
-            lines.append('')
-        for hl in self.annotations:
-            atype = hl.get('type', 'highlight')
-            if atype == 'bookmark':
-                render_bookmark_as_text(hl, lines, as_markdown=as_markdown, link_prefix=link_prefix)
-            else:
-                render_highlight_as_text(hl, lines, as_markdown=as_markdown, link_prefix=link_prefix)
-        for sg in self.subgroups.values():
-            sg.render_as_text(lines, as_markdown, link_prefix)
+class ChapterGroup(ChapterGroupBase):
+    def render_timestamp(self, ts):
+        return render_timestamp(ts)
 
     def _collect_outline_and_colors(self, outline_headings, heading_id_counts, used_colors, used_decorations):
         if self.title:
@@ -1146,7 +1082,7 @@ class Export(Dialog):  # {{{
                     root.add_annot(a)
                 link_prefix = link_prefix_func(book_id, a['format'], a) or None
 
-                lines.append('# ' + db.field_for('title', book_id))
+                lines.append('# ' + db.field_for('title', book_id))  # ty: ignore[unsupported-operator]
                 lines.append('')
                 root.render_as_text(lines, True, link_prefix)
                 lines.append('')
@@ -1163,7 +1099,7 @@ class Export(Dialog):  # {{{
             for book_id, group in bid_groups.items():
                 lp = link_prefix_func(book_id, group[-1]['format'], group[-1]) or None
                 book_title = db.field_for('title', book_id)
-                book_group = root.group_for_title(book_title)
+                book_group = root.group_for_title(book_title)  # ty: ignore[invalid-argument-type]
                 for a in group:
                     book_group.add_annot(dict(a, _link_prefix=lp))
             return root.render_as_html()
@@ -1179,7 +1115,7 @@ class Export(Dialog):  # {{{
                 root.add_annot(a)
             link_prefix = link_prefix_func(book_id, a['format'], a) or None
 
-            lines.append('# ' + db.field_for('title', book_id))
+            lines.append('# ' + db.field_for('title', book_id))  # ty: ignore[unsupported-operator]
             lines.append('')
             root.render_as_text(lines, as_markdown, link_prefix)
             lines.append('')
@@ -1552,7 +1488,7 @@ class ResultsList(QTreeWidget):
         for item in self.selectedItems():
             x = item.data(0, Qt.ItemDataRole.UserRole)
             ans = x['annotation'].copy()
-            for key in ('book_id', 'format'):
+            for key in ('book_id', 'format', 'user_type', 'user'):
                 ans[key] = x[key]
             yield ans
 
@@ -1704,18 +1640,16 @@ class Restrictions(QWidget):
             is_dark = is_dark_theme()
             model = tb.model()
             assert isinstance(model, QStandardItemModel)
-            highlight_color_row = 1
             all_styles = self.annotation_style_cache.get(db.library_id)
             if all_styles is None:
                 all_styles = self.annotation_style_cache[db.library_id] = db.all_annotation_styles()
-            for style_name, style in all_styles.items():
+            for highlight_color_row, (style_name, style) in enumerate(all_styles.items(), 1):
                 item = QStandardItem(highlight_style_title(style_name, style))
                 item.setData({'type': 'highlight', 'style': style}, Qt.ItemDataRole.UserRole)
                 dec = decoration_for_style(self.palette(), style, self.icon_size, dpr, is_dark)
                 if dec:
                     item.setData(dec, Qt.ItemDataRole.DecorationRole)
                 model.insertRow(highlight_row + highlight_color_row, item)
-                highlight_color_row += 1
 
         tb.blockSignals(False)
         tb_is_visible = tb.count() > 2
@@ -2056,7 +1990,7 @@ class DetailsPanel(QWidget):
         series_text = ''
         if series:
             use_roman_numbers = config['use_roman_numerals_for_series_number']
-            series_text = f'{fmt_sidx(sidx, use_roman=use_roman_numbers)} of {series}'
+            series_text = f'{fmt_sidx(cast("float", sidx), use_roman=use_roman_numbers)} of {series}'  # series_index is a float
         annot = r['annotation']
         atype = annotation_title(annot['type'], singular=True)
         book_format = r['format']
@@ -2106,7 +2040,7 @@ class DetailsPanel(QWidget):
         <h3 style="text-align: left; {highlight_css}">{atype}</h3>
         {text}
         '''.format(
-            title=a(title),
+            title=a(cast('str', title)),
             authors=a(authors),
             series=a(series_text),
             book_format=a(book_format),

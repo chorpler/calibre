@@ -3,6 +3,7 @@
 import re
 from functools import partial
 from random import shuffle
+from typing import TYPE_CHECKING
 
 from qt.core import QCheckBox, QDialog, QDialogButtonBox, QGridLayout, QIcon, QLabel, QMenu, QSize, QStyle, Qt, QTabWidget, QTimer, QVBoxLayout, QWidget
 
@@ -16,9 +17,11 @@ from calibre.gui2.store.search.adv_search_builder import AdvSearchBuilderDialog
 from calibre.gui2.store.search.download_thread import CacheUpdateThreadPool, SearchThreadPool
 from calibre.gui2.store.search.models import Matches
 from calibre.gui2.store.search.search_ui import Ui_Dialog
-from calibre.gui2.widgets2 import HistoryLineEdit2
 from calibre.utils.filenames import ascii_filename
 from calibre.utils.localization import _
+
+if TYPE_CHECKING:
+    from calibre.gui2.widgets2 import HistoryLineEdit2
 
 
 def add_items_to_context_menu(widget: HistoryLineEdit2, menu: QMenu) -> None:
@@ -502,7 +505,6 @@ if __name__ == '__main__':
     from calibre.gui2.preferences.main import init_gui
 
     app = Application([])
-    app
     gui = init_gui()
 
     s = SearchDialog(gui, query=' '.join(sys.argv[1:]))

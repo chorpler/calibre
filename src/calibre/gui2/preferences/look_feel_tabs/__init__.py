@@ -3,6 +3,7 @@
 
 import json
 from threading import Thread
+from typing import TYPE_CHECKING, cast
 
 from qt.core import (
     QAbstractListModel,
@@ -44,6 +45,9 @@ from calibre.gui2.preferences.coloring import EditRules
 from calibre.gui2.ui import get_gui
 from calibre.utils.formatter import EvalFormatter
 from calibre.utils.localization import _
+
+if TYPE_CHECKING:
+    from calibre.gui2.library.caches import ThumbnailRenderer
 
 
 class DefaultAuthorLink(QWidget):
@@ -126,10 +130,11 @@ class DefaultAuthorLink(QWidget):
                 assert isinstance(lv_model, _BooksModel)
                 book_id = lv_model.id(row)
                 mi = db.new_api.get_proxy_metadata(book_id)
+                authors = cast('tuple[str, ...]', mi.authors)  # ProxyMetadata attributes are typed as object
                 vals.append({
-                    'author': qquote(mi.authors[0]),
+                    'author': qquote(authors[0]),
                     'title': qquote(mi.title),
-                    'author_sort': qquote(mi.author_sort_map.get(mi.authors[0])),
+                    'author_sort': qquote(cast('str', mi.author_sort_map.get(authors[0]))),  # every author has an entry in author_sort_map
                 })
         d = TemplateDialog(parent=self, text=self.custom_url.text(), mi=vals, formatter=EvalFormatter)
         if d.exec() == QDialog.DialogCode.Accepted:
@@ -573,7 +578,6 @@ class CoverCacheConfig(LazyConfigWidgetBase):
         self.gui = gui
 
     def link(self, cover_cache, name_disk_cache_size, name_cache_size_multiple=None):
-        from calibre.gui2.library.caches import ThumbnailRenderer
 
         self.cover_cache: ThumbnailRenderer = cover_cache.renderer
         self.name_disk_cache_size = name_disk_cache_size

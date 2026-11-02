@@ -1,7 +1,7 @@
 # License: GPLv3 Copyright: 2008, Kovid Goyal <kovid at kovidgoyal.net>
 
-from collections import defaultdict, namedtuple
-from typing import cast
+from collections import defaultdict
+from typing import NamedTuple, cast
 
 from qt.core import QApplication, QDialog, QIcon, QListWidgetItem, Qt
 
@@ -33,8 +33,13 @@ class TagCategories(QDialog, Ui_TagCategories):
         'languages': QIcon.ic('languages.png'),
     }
 
-    ItemTuple = namedtuple('ItemTuple', 'v k')
-    CategoryNameTuple = namedtuple('CategoryNameTuple', 'n k')
+    class ItemTuple(NamedTuple):
+        v: str
+        k: str
+
+    class CategoryNameTuple(NamedTuple):
+        n: str
+        k: str
 
     def __init__(self, window, db, on_category=None, book_ids=None):
         QDialog.__init__(self, window)
@@ -180,13 +185,13 @@ class TagCategories(QDialog, Ui_TagCategories):
         self.category_box.blockSignals(False)
 
     def make_available_list_item(self, key, val):
-        w = QListWidgetItem(cast(QIcon, self.all_items[key]['icon']), val)
+        w = QListWidgetItem(cast('QIcon', self.all_items[key]['icon']), val)
         w.setData(Qt.ItemDataRole.UserRole, self.item_tuple(key, val))
         w.setToolTip(_('Lookup name: {}').format(key))
         return w
 
     def make_applied_list_item(self, tup):
-        if tup.v not in cast(set, self.all_items[tup.k]['values']):
+        if tup.v not in cast('set', self.all_items[tup.k]['values']):
             t = tup.v + ' ' + _('(Not in library)')
         elif tup.k not in self.available_items:
             t = tup.v + ' ' + _('(Hidden in Tag browser)')
@@ -194,7 +199,7 @@ class TagCategories(QDialog, Ui_TagCategories):
             t = tup.v + ' ' + _('(Hidden by Virtual library)')
         else:
             t = tup.v
-        w = QListWidgetItem(cast(QIcon, self.all_items[tup.k]['icon']), t)
+        w = QListWidgetItem(cast('QIcon', self.all_items[tup.k]['icon']), t)
         w.setData(Qt.ItemDataRole.UserRole, tup)
         w.setToolTip(_('Lookup name: {}').format(tup.k))
         return w

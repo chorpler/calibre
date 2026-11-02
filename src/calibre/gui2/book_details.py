@@ -3,13 +3,11 @@
 
 import os
 import re
-from collections import namedtuple
-from collections.abc import Callable
 from contextlib import suppress
 from functools import lru_cache, partial
 from math import ceil
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from qt.core import (
     QAction,
@@ -73,9 +71,15 @@ from calibre.utils.resources import get_path as P
 from calibre.utils.serialize import json_loads
 from polyglot.binary import from_hex_bytes
 
-InternetSearch = namedtuple('InternetSearch', 'author where')
+
+class InternetSearch(NamedTuple):
+    author: str | None
+    where: str
+
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from calibre.gui2.dialogs.book_info import BookInfo as DialogBookInfo
 
 
@@ -312,7 +316,7 @@ def init_find_in_grouped_search(menu, field, value, book_info):
         return
     gsts = db.prefs.get('grouped_search_terms', {})
     gsts_to_show = []
-    for v in gsts:
+    for v in gsts:  # ty: ignore[not-iterable]
         fk = fm.search_term_to_field_key(v)
         if field in fk:
             gsts_to_show.append(v)
@@ -719,7 +723,7 @@ def create_copy_links(menu, data=None):
         with suppress(Exception):
             data_files = db.new_api.list_extra_files(book_id, use_cache=True, pattern=DATA_FILE_PATTERN)
             if data_files:
-                data_path = os.path.join(db.backend.library_path, mi.path, DATA_DIR_NAME)
+                data_path = os.path.join(db.backend.library_path, mi.path, DATA_DIR_NAME)  # ty: ignore[no-matching-overload]
                 link_action(
                     _("Link to open book's data files folder"),
                     bytes(QUrl.fromLocalFile(data_path).toEncoded()).decode('utf-8'),
@@ -755,7 +759,7 @@ def create_copy_links(menu, data=None):
     if all_links:
         menu.addSeparator()
         all_links.insert(0, '')
-        all_links.insert(0, mi.get('title') + ' - ' + ' & '.join(mi.get('authors')))
+        all_links.insert(0, mi.title + ' - ' + ' & '.join(mi.authors))
         link_action(_('Copy all the above links'), '\n'.join(all_links))
 
 
@@ -1117,10 +1121,10 @@ class CoverView(QWidget):  # {{{
             _('Choose cover save location'),
             filters=[(_('JPEG images'), ['jpg', 'jpeg'])],
             all_files=False,
-            initial_filename='{}.jpeg'.format(sanitize_file_name(db.field_for('title', book_id, default_value='cover'))),
+            initial_filename='{}.jpeg'.format(sanitize_file_name(db.field_for('title', book_id, default_value='cover'))),  # ty: ignore[no-matching-overload]
         )
         if path:
-            db.copy_cover_to(book_id, path)
+            db.copy_cover_to(book_id, path)  # ty: ignore[invalid-argument-type]
 
     def update_cover(self, pmap=None, cdata=None):
         if pmap is None:
@@ -1195,7 +1199,7 @@ class CoverView(QWidget):  # {{{
 class FormatAction(QAction):
     current_fmt: tuple[str | int, str] | None = None
     current_url: str | None = None
-    data: tuple[str | None, str | None, str | None] = None, None, None
+    data: tuple[str | None, str | None, str | None] = None, None, None  # ty: ignore[invalid-attribute-override]
 
 
 class BookInfo(HTMLDisplay):
@@ -1633,7 +1637,7 @@ class BookDetails(DetailsLayout, DropMixin):  # {{{
             if data.author is None:
                 a = self.last_data['authors']
                 assert a is not None
-                url = url_for_book_search(data.where, title=self.last_data['title'], author=a[0])
+                url = url_for_book_search(data.where, title=cast('str', self.last_data['title']), author=a[0])  # title is always a str
             else:
                 url = url_for_author_search(data.where, author=data.author)
             safe_open_url(url)
@@ -1656,7 +1660,7 @@ class BookDetails(DetailsLayout, DropMixin):  # {{{
 
         def browse(url):
             if url.startswith(DATA_DIR_NAME + '/') and self.last_data.get('book_id'):
-                base = get_gui(fail_if_absent=True).current_db.abspath(self.last_data['book_id'], index_is_id=True)
+                base = get_gui(fail_if_absent=True).current_db.abspath(self.last_data['book_id'], index_is_id=True)  # ty: ignore[invalid-argument-type]
                 path = os.path.join(base, url)
                 qurl = QUrl.fromLocalFile(path)
             else:

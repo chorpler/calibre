@@ -678,7 +678,8 @@ class Editor(QMainWindow):
         c = self.editor.cursorForPosition(pos)
         origc = QTextCursor(c)
         current_cursor = self.editor.textCursor()
-        r = origr = self.editor.syntax_range_for_cursor(c)
+        r = self.editor.syntax_range_for_cursor(c)
+        origr = self.editor.syntax_range_for_point(pos)
         if (r is None or not r.format.property(SPELL_PROPERTY)) and c.positionInBlock() > 0 and not current_cursor.hasSelection():
             c.setPosition(c.position() - 1)
             r = self.editor.syntax_range_for_cursor(c)
@@ -798,7 +799,7 @@ def launch_editor(path_to_edit, path_is_raw=False, syntax='html', callback=None)
     opts = option_parser().parse_args([])
     app = Application([])
     # Create the actions that are placed into the editors toolbars
-    main = Main(opts)  # noqa: F841
+    main = Main(opts)  # ruff: ignore[unused-variable]
     if path_is_raw:
         raw = path_to_edit
     else:

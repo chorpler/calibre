@@ -629,9 +629,7 @@ class Quickview(QDialog, Ui_Quickview):
         self.items.blockSignals(False)
 
     def check_for_no_items(self):
-        view = self.view
-        assert view is not None
-        if not self.is_closed and view.model().count() == 0:
+        if (view := self.view) and not self.is_closed and view.model().count() == 0:
             self.indicate_no_items()
 
     def indicate_no_items(self):
@@ -812,8 +810,8 @@ class Quickview(QDialog, Ui_Quickview):
             assert view is not None
             view.select_rows([book_id])
             em = find_plugin('Edit Metadata')
-            if em and em.actual_plugin_:
-                em.actual_plugin_.edit_metadata(None)
+            if em and (ac := getattr(em, 'actual_plugin_', None)):
+                ac.edit_metadata(None)
         finally:
             self.follow_library_view = True
 
@@ -937,7 +935,7 @@ def get_qv_field_list(fm, use_defaults=False):
         src = db.prefs.defaults
     else:
         src = db.prefs
-    fieldlist = list(src['qv_display_fields'])
+    fieldlist = list(src['qv_display_fields'])  # ty: ignore[invalid-argument-type]
     names = frozenset(x[0] for x in fieldlist)
     for field in fm.displayable_field_keys():
         if field != 'comments' and fm[field]['datatype'] != 'comments' and field not in names:

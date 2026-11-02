@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # License: GPLv3 Copyright: 2013, Kovid Goyal <kovid at kovidgoyal.net>
 
-from collections import namedtuple
+from typing import NamedTuple
 
 from qt.core import (
     QBrush,
@@ -68,7 +68,7 @@ SLDX = {
     'blue': '0087ff',
     'cyan': '00afaf',
     'green': '5f8700',
-}  # noqa: E501
+}
 SLD = {
     'base03': '002b36',
     'base02': '073642',
@@ -86,7 +86,7 @@ SLD = {
     'blue': '268bd2',
     'cyan': '2aa198',
     'green': '859900',
-}  # noqa: E501
+}
 m = {f'base{n}': f'base{n:02}' for n in range(1, 4)}
 m.update({f'base{n:02}': f'base{n}' for n in range(1, 4)})
 SLL = {m.get(k, k): v for k, v in SLD.items()}
@@ -253,7 +253,13 @@ def read_color(col):
         pass
 
 
-Highlight = namedtuple('Highlight', 'fg bg bold italic underline underline_color')
+class Highlight(NamedTuple):
+    fg: QBrush | None
+    bg: QBrush | None
+    bold: bool
+    italic: bool
+    underline: str | None
+    underline_color: QBrush | None
 
 
 def read_theme(raw):

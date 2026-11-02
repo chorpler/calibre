@@ -2,10 +2,10 @@
 # License: GPLv3 Copyright: 2008, Kovid Goyal <kovid at kovidgoyal.net>
 
 import numbers
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 from io import BytesIO
 from threading import Thread
-from typing import cast
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 import regex
 from qt.core import (
@@ -50,16 +50,50 @@ from calibre.utils.localization import _, ngettext
 from calibre.utils.titlecase import titlecase
 from polyglot.builtins import error_message
 
-Settings = namedtuple(
-    'Settings',
-    'remove_all remove add au aus do_aus rating pub do_series do_autonumber '
-    'do_swap_ta do_remove_conv do_auto_author series do_series_restart series_start_value series_increment '
-    'do_title_case cover_action clear_series clear_pub pubdate adddate do_title_sort languages clear_languages '
-    'restore_original comments generate_cover_settings read_file_metadata casing_algorithm do_compress_cover compress_cover_quality '
-    'tag_map_rules author_map_rules publisher_map_rules series_map_rules',
-)
+if TYPE_CHECKING:
+    from datetime import datetime
 
 null = object()
+
+
+class Settings(NamedTuple):
+    remove_all: bool
+    remove: list[str]
+    add: list[str]
+    au: str
+    aus: str
+    do_aus: bool
+    rating: int
+    pub: str
+    do_series: bool
+    do_autonumber: bool
+    do_swap_ta: bool
+    do_remove_conv: bool
+    do_auto_author: bool
+    series: str
+    do_series_restart: bool
+    series_start_value: float
+    series_increment: float
+    do_title_case: bool
+    cover_action: str | None
+    clear_series: bool
+    clear_pub: bool
+    pubdate: datetime | None
+    adddate: datetime | None
+    do_title_sort: bool
+    languages: list[str]
+    clear_languages: bool
+    restore_original: bool
+    comments: str | object
+    generate_cover_settings: dict | None
+    read_file_metadata: bool
+    casing_algorithm: str
+    do_compress_cover: bool
+    compress_cover_quality: int
+    tag_map_rules: tuple[str, ...]
+    author_map_rules: tuple[str, ...]
+    publisher_map_rules: tuple[str, ...]
+    series_map_rules: tuple[str, ...]
 
 
 class Caser(LineEditECM):
@@ -653,7 +687,7 @@ class MetadataBulkDialog(QDialog, Ui_MetadataBulkDialog):
     def __init__(self, window, rows, model, starting_tab, refresh_books):
         QDialog.__init__(self, window)
         self.setupUi(self)
-        setup_status_actions(cast(LineEditIndicatorsProtocol, self.test_result))
+        setup_status_actions(cast('LineEditIndicatorsProtocol', self.test_result))
         self.series.set_sort_func(title_sort)
         self.model = model
         self.db = model.db
@@ -1197,7 +1231,7 @@ class MetadataBulkDialog(QDialog, Ui_MetadataBulkDialog):
         if self.s_r_error is not None:
             tt = error_message(self.s_r_error)
             self.test_result.setText(tt)
-        update_status_actions(cast(LineEditIndicatorsProtocol, self.test_result), self.s_r_error is None, tt)
+        update_status_actions(cast('LineEditIndicatorsProtocol', self.test_result), self.s_r_error is None, tt)
         for i in range(self.s_r_number_of_books):
             getattr(self, f'book_{i + 1}_result').setText('')
 
@@ -1488,7 +1522,7 @@ class MetadataBulkDialog(QDialog, Ui_MetadataBulkDialog):
         # Cache values from GUI so that Qt widgets are not used in
         # non GUI thread
         for w in getattr(self, 'custom_column_widgets', []):
-            w.gui_val
+            w.gui_val  # ruff: ignore[useless-expression]
 
         remove_all = self.remove_all_tags.isChecked()
         remove = []

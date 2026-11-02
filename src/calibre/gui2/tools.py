@@ -154,7 +154,9 @@ def convert_single_ebook(
 # Bulk convert {{{
 
 
-def convert_bulk_ebook(parent, queue, db, book_ids, out_format=None, args=[]):
+def convert_bulk_ebook(parent, queue, db, book_ids, out_format=None, args=None):
+    if args is None:
+        args = []
     total = len(book_ids)
     if total == 0:
         return None, None, None
@@ -202,7 +204,7 @@ class QueueBulk(QProgressDialog):
             input_format = get_input_format_for_book(self.db, book_id, None)[0]
             input_fmt = self.db.original_fmt(book_id, input_format).lower()
             same_fmt = input_fmt == self.output_format.lower()
-            mi, opf_file = create_opf_file(self.db, book_id)
+            mi, opf_file = create_opf_file(self.db, book_id, for_conversion=True)
             in_file = PersistentTemporaryFile('.' + input_format)
             with in_file:
                 self.db.copy_format_to(book_id, input_fmt, in_file, index_is_id=True)
@@ -324,6 +326,7 @@ def fetch_scheduled_recipe(arg):  # {{{
         from calibre.customize.ui import plugin_for_output_format
 
         p = plugin_for_output_format('pdf')
+        assert p is not None
         for opt in p.options:
             recs.append((opt.option.name, pdf.get(opt.option.name, opt.recommended_value), OptionRecommendation.HIGH))
 
