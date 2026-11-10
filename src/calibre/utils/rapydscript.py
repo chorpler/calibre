@@ -554,6 +554,10 @@ def run_rapydscript_tests() -> NoReturn:
     with open(fname, 'rb') as f:
         # Tests are registered via decorators, which tree shaking would remove
         result = compile_fast(f.read(), fname, tree_shaking=False)
+    # Without tree shaking, rapydscript-ng leaves the @no_prune hint for the
+    # tree shaker in its output as a call, so make it a no-op. It is on the
+    # first line so that line numbers in tracebacks are unchanged.
+    code = 'window.no_prune = function(f) { return f; }; ' + substitute_placeholders(result['code'])
 
     class UrlSchemeHandler(QWebEngineUrlSchemeHandler):
         def __init__(self, parent: QObject | None = None) -> None:
@@ -561,7 +565,7 @@ def run_rapydscript_tests() -> NoReturn:
             self.allowed_hosts = (FAKE_HOST,)
             self.registered_data = {}
 
-        def requestStarted(self, a0: QWebEngineUrlRequestJob) -> None:  # ty: ignore[invalid-method-override]
+        def requestStarted(self, a0: QWebEngineUrlRequestJob) -> None:  # ty: ignore[incompatible-method-override]
             if bytes(a0.requestMethod()) != b'GET':
                 return self.fail_request(a0, QWebEngineUrlRequestJob.Error.RequestDenied)
             url = a0.requestUrl()
@@ -586,7 +590,7 @@ def run_rapydscript_tests() -> NoReturn:
             profile = QWebEngineProfile(QApplication.instance())
             profile.setHttpUserAgent('calibre-tester')
             setup_profile(profile)
-            insert_scripts(profile, create_script('test-rapydscript.js', result['code'], on_subframes=False))
+            insert_scripts(profile, create_script('test-rapydscript.js', code, on_subframes=False))
             url_handler = UrlSchemeHandler(profile)
             profile.installUrlSchemeHandler(QByteArray(FAKE_PROTOCOL.encode('ascii')), url_handler)
             QWebEnginePage.__init__(self, profile, None)
@@ -628,7 +632,7 @@ def run_rapydscript_tests() -> NoReturn:
     raise SystemExit(int(res))
 
 
-def set_data(src: str, output: str, source_map: str = '', source_url: str = '', **kw: str) -> str:
+def substitute_placeholders(src: str, **kw: str) -> str:
     from calibre.db.constants import NO_SEARCH_LINK
     from calibre.ebooks.oeb.polish.main import SUPPORTED
     from calibre.library.page_count import CHARS_PER_PAGE
@@ -649,7 +653,11 @@ def set_data(src: str, output: str, source_map: str = '', source_url: str = '', 
         src = src.replace(k, v, 1)
     for k, v in kw.items():
         src = src.replace(k, v, 1)
-    src = src.rstrip()
+    return src
+
+
+def set_data(src: str, output: str, source_map: str = '', source_url: str = '', **kw: str) -> str:
+    src = substitute_placeholders(src, **kw).rstrip()
     src = src.removesuffix('//# sourceMappingURL=smap')
     if source_map:
         from base64 import standard_b64encode

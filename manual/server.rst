@@ -323,10 +323,17 @@ stored separately in the user database of the server.
 
 By default, KOReader identifies books by a checksum of the book file. The
 Content server can change the metadata embedded in books when they are
-downloaded, so copies of a book downloaded at different times may not be
-recognized as the same book. If reading positions do not sync, set
-:guilabel:`Document matching method` in the KOReader progress sync settings to
-:guilabel:`Filename` on all devices and keep the file names of books the same.
+downloaded, so copies of a book downloaded at different times can have
+different checksums. Once KOReader has synced with the server, it remembers the
+checksums of downloaded books and of the library files they were created from,
+so that all copies of the same format of a book share one reading position.
+Different formats of a book have separate reading positions, as positions in
+one format cannot be used in another. Copies downloaded before KOReader first
+synced with the server, or obtained other than by downloading them from the
+server, are not recognized. If reading positions do not sync for such copies,
+set :guilabel:`Document matching method` in the KOReader progress sync settings
+to :guilabel:`Filename` on all devices and keep the file names of books the
+same.
 
 
 Integrating the calibre Content server into other servers

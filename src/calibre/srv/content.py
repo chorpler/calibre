@@ -25,6 +25,7 @@ from calibre.ebooks.metadata.meta import set_metadata
 from calibre.ebooks.metadata.opf2 import metadata_to_opf
 from calibre.library.save_to_disk import find_plugboard
 from calibre.srv.errors import BookNotFound, HTTPBadRequest, HTTPForbidden, HTTPNotFound
+from calibre.srv.kosync import partial_md5, register_download
 from calibre.srv.metadata import encode_stat_result
 from calibre.srv.routes import endpoint, json
 from calibre.srv.utils import get_db, get_use_roman, header_as_str, http_date
@@ -291,9 +292,17 @@ def book_fmt(ctx: Context, rd: RequestData, library_id: str, db: Cache, book_id:
     else:
         mi = db.get_proxy_metadata(book_id)
 
+    # Servers not used for KOReader syncing do not record checksums
+    kosync = ctx.user_manager.kosync_in_use
+    source_document: str | None = None
+
     def copy_func(dest: IO[bytes]) -> None:
+        nonlocal source_document
         db.copy_format_to(book_id, fmt, dest)
         if update_metadata:
+            if kosync:
+                # KOReader may also be given the unmodified library file by other means
+                source_document = partial_md5(dest)
             if not mi.cover_data[-1]:
                 cdata = db.cover(book_id)
                 if cdata:
@@ -310,7 +319,10 @@ def book_fmt(ctx: Context, rd: RequestData, library_id: str, db: Cache, book_id:
         f'''{cd}; filename="{book_filename(rd, book_id, mi, fmt)}"; filename*=utf-8''{book_filename(rd, book_id, mi, fmt, as_encoded_unicode=True)}'''
     )
 
-    return create_file_copy(ctx, rd, 'fmt', library_id, book_id, fmt, mtime, copy_func, extra_etag_data=extra_etag_data)
+    ans = create_file_copy(ctx, rd, 'fmt', library_id, book_id, fmt, mtime, copy_func, extra_etag_data=extra_etag_data)
+    if kosync:
+        register_download(ctx, db, book_id, fmt, ans.output, source_document)
+    return ans
 
 
 # }}}

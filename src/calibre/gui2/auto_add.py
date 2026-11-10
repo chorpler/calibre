@@ -3,9 +3,11 @@
 
 import os
 import shutil
+import stat
 import tempfile
 import time
 from threading import Event, Thread
+from typing import NamedTuple
 
 from qt.core import QApplication, QCursor, QFileSystemWatcher, QObject, Qt, QTimer, pyqtSignal
 
@@ -19,13 +21,98 @@ from calibre.utils.localization import _
 from calibre.utils.tdir_in_cache import tdir_in_cache
 
 AUTO_ADDED = frozenset(BOOK_EXTENSIONS) - {'pdr', 'mbp', 'tan'}
+# Extensions used by browsers, download managers, torrent clients and file
+# transfer tools for files that are still being downloaded
+PARTIAL_DOWNLOAD_EXTENSIONS = frozenset((
+    'part',
+    'partial',
+    'crdownload',
+    'download',
+    'opdownload',
+    'filepart',
+    'tmp',
+    'temp',
+    '!qb',
+    '!ut',
+    'aria2',
+    'bc!',
+    'dlpart',
+))
+# Formats that are ZIP files and so can be checked for completeness by
+# looking for the End of Central Directory record at the end of the file
+ZIP_FORMATS = frozenset((
+    'epub',
+    'kepub',
+    'zip',
+    'cbz',
+    'htmlz',
+    'txtz',
+    'pmlz',
+    'oebzip',
+    'fbz',
+    'odt',
+    'docx',
+    'docm',
+    'xps',
+    'oxps',
+    'ibook',
+    'ibooks',
+    'iba',
+))
+# A file must be unchanged for at least this many seconds before it is added
+SETTLE_TIME = 2.0
+# Files that look truncated are not added until they have been unchanged
+# for this many seconds, after which they are assumed to be simply corrupt
+INCOMPLETE_GRACE_TIME = 300.0
+
+
+def is_partial_download(name: str, names_in_dir: set[str] | frozenset[str]) -> bool:
+    """Return True if name is a temporary file used while downloading or
+    copying, or if it is the target of a download that is still in progress,
+    as indicated by the presence of a sibling file such as name.part (Firefox
+    placeholders) or name.aria2 (aria2 control files)"""
+    if name.startswith(('.', '~$')):
+        # Hidden files: temporary files created by rsync, gvfs, etc. and
+        # macOS AppleDouble ._ files
+        return True
+    ext = name.rpartition('.')[-1].lower() if '.' in name else ''
+    if ext in PARTIAL_DOWNLOAD_EXTENSIONS:
+        return True
+    return any(f'{name}.{x}' in names_in_dir for x in ('part', 'aria2', 'crdownload', 'download', '!qB', '!ut'))
+
+
+def looks_complete(path: str, fmt: str) -> bool:
+    """Check the end of the file for the trailer that formats such as ZIP and PDF
+    are required to have. Missing trailers usually mean the file is still being
+    written. Raises OSError if the file cannot be read."""
+    if fmt in ZIP_FORMATS:
+        from calibre.utils.zipfile import _EndRecData
+
+        with open(path, 'rb') as f:
+            return _EndRecData(f) is not None
+    if fmt == 'pdf':
+        with open(path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 4096))
+            return b'%%EOF' in f.read()
+    with open(path, 'rb'):
+        # Only check that the file is readable, on Windows this fails if the
+        # file is open for writing by another process
+        pass
+    return True
+
+
+class Observation(NamedTuple):
+    signature: tuple[int, int]  # (size, mtime_ns)
+    unchanged_since: float  # time.monotonic() value
+    complete: bool | None = None  # None means not yet checked
 
 
 class AllAllowed:
-    def __init__(self):
+    def __init__(self) -> None:
         self.disallowed = frozenset(gprefs['blocked_auto_formats'])
 
-    def __contains__(self, x):
+    def __contains__(self, x) -> bool:
         return x not in self.disallowed
 
 
@@ -39,17 +126,19 @@ def allowed_formats():
 
 
 class Worker(Thread):
-    def __init__(self, path, callback):
+    def __init__(self, path, callback) -> None:
         Thread.__init__(self)
         self.daemon = True
         self.keep_running = True
         self.wake_up = Event()
         self.path, self.callback = path, callback
-        self.staging = set()
+        self.staging: set[str] = set()
+        self.observed: dict[str, Observation] = {}
+        self.next_check_at: float | None = None
         self.allowed = allowed_formats()
         self.read_rules()
 
-    def read_rules(self):
+    def read_rules(self) -> None:
         try:
             self.compiled_rules = tuple(map(compile_rule, gprefs.get('add_filter_rules', ())))
         except Exception:
@@ -65,11 +154,12 @@ class Worker(Thread):
             allowed = ext in self.allowed
         return allowed
 
-    def run(self):
+    def run(self) -> None:
         self.tdir = tdir_in_cache('aa')
         try:
             while self.keep_running:
-                self.wake_up.wait()
+                timeout = None if self.next_check_at is None else max(0, self.next_check_at - time.monotonic())
+                self.wake_up.wait(timeout)
                 self.wake_up.clear()
                 if not self.keep_running:
                     break
@@ -82,54 +172,67 @@ class Worker(Thread):
         finally:
             shutil.rmtree(self.tdir, ignore_errors=True)
 
-    def auto_add(self):
+    def files_ready_to_add(self, now: float | None = None) -> list[tuple[str, float]]:
+        """Return (name, mtime) for files that are allowed to be added and that
+        appear to have been completely written. Files that are still being
+        written are remembered and self.next_check_at is set so that they are
+        re-checked even if no further file system notifications arrive. This is
+        needed because, on Linux, writes to existing files in a watched
+        directory do not trigger notifications."""
+        if now is None:
+            now = time.monotonic()
+
+        def join(name: str) -> str:
+            return make_long_path_useable(os.path.join(self.path, name))
+
+        names = frozenset(os.listdir(make_long_path_useable(self.path)))
+        candidates: list[tuple[str, os.stat_result]] = []
+        for name in names:
+            if name in self.staging or is_partial_download(name, names) or not self.is_filename_allowed(name):
+                continue
+            path = join(name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue  # deleted or renamed after listdir()
+            # Firefox creates 0 byte placeholder files when downloading
+            if stat.S_ISREG(st.st_mode) and st.st_size > 0 and os.access(path, os.R_OK | os.W_OK):
+                candidates.append((name, st))
+
+        observed, self.observed = self.observed, {}
+        ready: list[tuple[str, float]] = []
+        next_check_at: float | None = None
+        for name, st in candidates:
+            sig = (st.st_size, st.st_mtime_ns)
+            obs = observed.get(name)
+            if obs is None or obs.signature != sig:
+                obs = Observation(sig, now)
+            check_at = obs.unchanged_since + SETTLE_TIME
+            if check_at <= now:
+                if obs.complete is None:
+                    try:
+                        obs = obs._replace(complete=looks_complete(join(name), os.path.splitext(name)[1][1:].lower()))
+                    except OSError:
+                        # On Windows, this means the file is open for writing in another process
+                        check_at = now + SETTLE_TIME
+                if obs.complete is False:
+                    check_at = obs.unchanged_since + INCOMPLETE_GRACE_TIME
+            self.observed[name] = obs
+            if check_at > now:
+                next_check_at = check_at if next_check_at is None else min(next_check_at, check_at)
+            else:
+                ready.append((name, st.st_mtime))
+        self.next_check_at = next_check_at
+        return ready
+
+    def auto_add(self) -> None:
         from calibre.ebooks.metadata.meta import metadata_from_filename
         from calibre.ebooks.metadata.opf2 import metadata_to_opf
         from calibre.utils.ipc.simple_worker import WorkerError, fork_job
 
-        def join(*x):
-            return make_long_path_useable(os.path.join(*x))
-
-        files = [
-            x
-            for x in os.listdir(join(self.path))
-            if
-            # Must not be in the process of being added to the db
-            x not in self.staging
-            and
-            # Firefox creates 0 byte placeholder files when downloading
-            os.stat(join(self.path, x)).st_size > 0
-            and
-            # Must be a file
-            os.path.isfile(join(self.path, x))
-            and
-            # Must have read and write permissions
-            os.access(join(self.path, x), os.R_OK | os.W_OK)
-            and
-            # Must be a known ebook file type
-            self.is_filename_allowed(x)
-        ]
         data = []
-        # Give any in progress copies time to complete
-        time.sleep(2)
-
-        def safe_mtime(x):
-            try:
-                return os.path.getmtime(join(self.path, x))
-            except OSError:
-                return time.time()
-
-        for fname in sorted(files, key=safe_mtime):
+        for fname, mtime in sorted(self.files_ready_to_add(), key=lambda x: x[1]):
             f = os.path.join(self.path, fname)
-
-            # Try opening the file for reading, if the OS prevents us, then at
-            # least on windows, it means the file is open in another
-            # application for writing. We will get notified by
-            # QFileSystemWatcher when writing is completed, so ignore for now.
-            try:
-                open(make_long_path_useable(f), 'rb').close()
-            except Exception:
-                continue
             tdir = tempfile.mkdtemp(dir=self.tdir)
             try:
                 fork_job('calibre.ebooks.metadata.meta', 'forked_read_metadata', (f, tdir), no_output=True)
@@ -160,6 +263,7 @@ class Worker(Thread):
                 with open(opfpath, 'wb') as f:
                     f.write(metadata_to_opf(mi))
             self.staging.add(fname)
+            self.observed.pop(fname, None)
             data.append((fname, tdir))
         if data:
             self.callback(data)
@@ -169,7 +273,7 @@ class AutoAdder(QObject):
     metadata_read = pyqtSignal(object)
     auto_convert = pyqtSignal(object)
 
-    def __init__(self, path, parent):
+    def __init__(self, path, parent) -> None:
         QObject.__init__(self, parent)
         if path and os.path.isdir(path) and os.access(path, os.R_OK | os.W_OK):
             self.watcher = QFileSystemWatcher(self)
@@ -181,11 +285,11 @@ class AutoAdder(QObject):
         elif path:
             prints(path, 'is not a valid directory to watch for new ebooks, ignoring')
 
-    def read_rules(self):
+    def read_rules(self) -> None:
         if hasattr(self, 'worker'):
             self.worker.read_rules()
 
-    def initialize(self):
+    def initialize(self) -> None:
         try:
             if os.listdir(self.worker.path):
                 self.dir_changed()
@@ -193,18 +297,18 @@ class AutoAdder(QObject):
             pass
         self.watcher.addPath(self.worker.path)
 
-    def dir_changed(self, *args):
+    def dir_changed(self, *args) -> None:
         if os.path.isdir(self.worker.path) and os.access(self.worker.path, os.R_OK | os.W_OK):
             if not self.worker.is_alive():
                 self.worker.start()
             self.worker.wake_up.set()
 
-    def stop(self):
+    def stop(self) -> None:
         if hasattr(self, 'worker'):
             self.worker.keep_running = False
             self.worker.wake_up.set()
 
-    def wait(self):
+    def wait(self) -> None:
         if hasattr(self, 'worker'):
             self.worker.join()
 
@@ -214,11 +318,11 @@ class AutoAdder(QObject):
     def __exit__(self, *args):
         QApplication.restoreOverrideCursor()
 
-    def add_to_db(self, data):
+    def add_to_db(self, data) -> None:
         with self:
             self.do_add(data)
 
-    def do_add(self, data):
+    def do_add(self, data) -> None:
         from calibre.ebooks.metadata.opf2 import OPF
         from calibre.gui2.library.models import BooksModel
         from calibre.gui2.ui import get_gui
@@ -335,9 +439,92 @@ class AutoAdder(QObject):
         if needs_rescan:
             QTimer.singleShot(2000, self.dir_changed)
 
-    def do_auto_convert(self, added_ids):
+    def do_auto_convert(self, added_ids) -> None:
         from calibre.gui2.ui import get_gui
 
         gui = get_gui()
         assert gui is not None
         gui.iactions['Convert Books'].auto_convert_auto_add(added_ids)
+
+
+def find_tests():
+    import unittest
+    import zipfile
+
+    class TestAutoAdd(unittest.TestCase):
+        def setUp(self) -> None:
+            self.tdir = tempfile.mkdtemp()
+            self.worker = Worker(self.tdir, lambda data: None)
+            self.worker.allowed = AUTO_ADDED
+            self.worker.compiled_rules = ()
+
+        def tearDown(self) -> None:
+            shutil.rmtree(self.tdir)
+
+        def write(self, name: str, data: bytes) -> str:
+            path = os.path.join(self.tdir, name)
+            with open(path, 'wb') as f:
+                f.write(data)
+            return path
+
+        def write_zip(self, name: str) -> bytes:
+            path = os.path.join(self.tdir, name)
+            with zipfile.ZipFile(path, 'w') as zf:
+                zf.writestr('mimetype', 'application/epub+zip')
+                zf.writestr('content.opf', os.urandom(4096))
+            with open(path, 'rb') as f:
+                return f.read()
+
+        def ready(self, now: float) -> set[str]:
+            return {x[0] for x in self.worker.files_ready_to_add(now)}
+
+        def test_partial_download_names(self) -> None:
+            names = frozenset(('a.epub', 'a.epub.part', 'b.epub', 'b.epub.aria2', 'c.epub'))
+            for name in ('a.epub', 'b.epub', 'x.epub.crdownload', 'x.pdf.PART', '.x.epub', '._x.epub', '~$x.docx', 'x.epub.!qB'):
+                self.assertTrue(is_partial_download(name, names), name)
+            for name in ('c.epub', 'x.part.epub', 'x'):
+                self.assertFalse(is_partial_download(name, names), name)
+
+        def test_looks_complete(self) -> None:
+            data = self.write_zip('x.epub')
+            self.assertTrue(looks_complete(os.path.join(self.tdir, 'x.epub'), 'epub'))
+            self.assertFalse(looks_complete(self.write('y.epub', data[: len(data) // 2]), 'epub'))
+            pdf = b'%PDF-1.4\n' + b'x' * 10000 + b'\n%%EOF\n'
+            self.assertTrue(looks_complete(self.write('x.pdf', pdf), 'pdf'))
+            self.assertFalse(looks_complete(self.write('y.pdf', pdf[:5000]), 'pdf'))
+            self.assertTrue(looks_complete(self.write('x.txt', b'xxx'), 'txt'))
+
+        def test_files_ready_to_add(self) -> None:
+            data = self.write_zip('done.epub')
+            self.write('empty.epub', b'')
+            self.write('ignored.epub.part', data)
+            self.write('ignored.epub', data[:100])
+            self.write('growing.epub', data[:100])
+            self.write('trunc.epub', data[:100])
+            t = 1000.0
+            self.assertEqual(self.ready(t), set())
+            self.assertEqual(self.worker.next_check_at, t + SETTLE_TIME)
+            self.write('growing.epub', data[:200])
+            t += SETTLE_TIME
+            # growing.epub changed so it must settle again, trunc.epub has no
+            # zip trailer so waits for the grace period
+            self.assertEqual(self.ready(t), {'done.epub'})
+            self.assertEqual(self.worker.next_check_at, t + SETTLE_TIME)
+            self.write('growing.epub', data)
+            self.worker.staging.add('done.epub')
+            t += SETTLE_TIME
+            self.assertEqual(self.ready(t), set())
+            t += SETTLE_TIME
+            self.assertEqual(self.ready(t), {'growing.epub'})
+            self.assertEqual(self.worker.next_check_at, 1000.0 + INCOMPLETE_GRACE_TIME)
+            # the download completes and the placeholder is removed
+            os.remove(os.path.join(self.tdir, 'ignored.epub.part'))
+            self.write('ignored.epub', data)
+            self.assertEqual(self.ready(t), {'growing.epub'})
+            t += SETTLE_TIME
+            self.assertEqual(self.ready(t), {'growing.epub', 'ignored.epub'})
+            t = 1000.0 + INCOMPLETE_GRACE_TIME
+            self.assertEqual(self.ready(t), {'growing.epub', 'ignored.epub', 'trunc.epub'})
+            self.assertIsNone(self.worker.next_check_at)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestAutoAdd)

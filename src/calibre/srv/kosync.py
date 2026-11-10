@@ -13,13 +13,16 @@ import math
 import re
 import time
 from hashlib import md5
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
+
+import apsw
 
 from calibre.srv.errors import HTTPForbidden
 from calibre.srv.routes import endpoint
 from calibre.srv.routes import json as json_postprocess
 
 if TYPE_CHECKING:
+    from calibre.db.cache import Cache
     from calibre.srv.handler import Context
     from calibre.srv.http_response import RequestData
 
@@ -39,6 +42,37 @@ document_pat = re.compile(r'[A-Za-z0-9_]+')
 # Limit the size of the strings stored per document, KOReader sends MD5
 # hashes and short XPointers
 MAX_FIELD_LENGTH = 4096
+
+
+def partial_md5(stream: IO[bytes]) -> str:
+    """KOReader's util.partialMD5: sample up to twelve 1 KiB blocks, preserving the file position."""
+    position = stream.tell()
+    digest = md5()
+    try:
+        for i in range(-1, 11):
+            stream.seek(0 if i == -1 else 1024 << (2 * i))
+            sample = stream.read(1024)
+            if not sample:
+                break
+            digest.update(sample)
+    finally:
+        stream.seek(position)
+    return digest.hexdigest()
+
+
+def register_download(ctx: Context, db: Cache, book_id: int, fmt: str, output: IO[bytes], source_document: str | None) -> None:
+    """
+    Remember the checksum of a downloaded book file, and of the library file it was created from,
+    so that KOReader positions synced via either are shared. The book is identified by its UUID,
+    which survives metadata edits and distinguishes books in different libraries, and its format,
+    since positions cannot be used across formats.
+    """
+    try:
+        document = partial_md5(output)
+        book = f'calibre:{db.library_id}:{db.field_for("uuid", book_id)}:{fmt.upper()}'
+        ctx.user_manager.register_kosync_documents(book, document, *((source_document,) if source_document else ()))
+    except (OSError, apsw.Error) as err:
+        log_warning(ctx, f'Failed to register KOReader checksums for book {book_id}: {err}')
 
 
 def error(rd: RequestData, err: ErrorSpec) -> JSONResponse:
@@ -94,6 +128,8 @@ def check_user(ctx: Context, rd: RequestData) -> tuple[str, None] | tuple[None, 
     if ctx.opts.auth:
         # Used by check_for_write_access() and the access log
         rd.username = username
+    # Start recording the checksums of downloaded files, see register_download()
+    ctx.user_manager.mark_kosync_in_use()
     return username, None
 
 

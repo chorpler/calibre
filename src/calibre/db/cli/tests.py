@@ -179,7 +179,7 @@ class FTSSearchTest(BaseTest):
         db = self.init_cache()
         self.addCleanup(db.close)
         # the cache fts jobs will index formats, changing the numbers, so disable it
-        db.queue_next_fts_job = lambda *a: None  # ty: ignore[invalid-assignment]
+        db.queue_next_fts_job = lambda *a: None
         db.enable_fts(start_pool=False)
         with self.assertRaisesRegex(SystemExit, '3 files out of 3'):
             self.run_fts_search(db, 'test')
@@ -343,7 +343,7 @@ class RestoreDatabaseTest(BaseTest):
         # Only books that have a folder on disk can be restored
         self.book_dirs = {}
         for book_id in cache.all_book_ids():
-            book_dir = os.path.join(self.library_path, *cache.field_for('path', book_id).split('/'))  # ty: ignore[unresolved-attribute]
+            book_dir = os.path.join(self.library_path, *cache.field_for('path', book_id).split('/'))  # ty: ignore[missing-union-attribute]
             if os.path.exists(os.path.join(book_dir, 'metadata.opf')):
                 self.book_dirs[book_id] = book_dir
         self.assertGreater(len(self.book_dirs), 1)

@@ -98,7 +98,7 @@ class TestResult(unittest.TextTestResult):
             elapsed -= self.start_time.get(test, elapsed)
             self.times[test] = elapsed
         finally:
-            self.stream.writeln = orig  # type: ignore
+            self.stream.writeln = orig
             self.stream.writeln(f' [{elapsed:.1f} s]')
 
     def stopTestRun(self) -> None:
@@ -787,6 +787,9 @@ def find_tests(which_tests: Collection[str] | None = None, exclude_tests: Collec
         from calibre.scraper.test_fetch_backend import find_tests
 
         a(find_tests())
+        from calibre.gui2.store.test_amazon import find_tests
+
+        a(find_tests())
         from calibre.web.automate.test_worker import find_tests
 
         a(find_tests())
@@ -820,6 +823,9 @@ def find_tests(which_tests: Collection[str] | None = None, exclude_tests: Collec
         from calibre.ebooks.mobi.reader.markup import find_tests
 
         a(find_tests())
+        from calibre.ebooks.mobi.langcodes import find_tests
+
+        a(find_tests())
         from calibre.ebooks.conversion.plugins.archive_input import find_tests
 
         a(find_tests())
@@ -827,6 +833,9 @@ def find_tests(which_tests: Collection[str] | None = None, exclude_tests: Collec
 
         a(find_tests())
         from calibre.ebooks.txt.txtml import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.rtf.rtfml import find_tests
 
         a(find_tests())
         from calibre.ebooks.metadata.rtf import find_tests
@@ -857,6 +866,9 @@ def find_tests(which_tests: Collection[str] | None = None, exclude_tests: Collec
 
         a(find_tests())
         from calibre.gui2.tag_mapper import find_tests
+
+        a(find_tests())
+        from calibre.gui2.auto_add import find_tests
 
         a(find_tests())
         from calibre.ebooks.html_entities import find_tests
@@ -904,6 +916,9 @@ def find_tests(which_tests: Collection[str] | None = None, exclude_tests: Collec
 
         a(find_tests())
     if ok('misc'):
+        from calibre.gui2.tts.test_download import find_tests
+
+        a(find_tests())
         from calibre.ebooks.html.input import find_tests
 
         a(find_tests())
@@ -959,6 +974,9 @@ def find_tests(which_tests: Collection[str] | None = None, exclude_tests: Collec
 
         a(find_tests())
         from calibre.utils.copy_files_test import find_tests
+
+        a(find_tests())
+        from calibre.devices.kobo.test_driver import find_tests
 
         a(find_tests())
         from calibre.utils.safe_atexit import find_tests

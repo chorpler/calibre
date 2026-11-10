@@ -23,8 +23,8 @@ dependencies = [
 	"soupsieve == 2.9",
     "typing-extensions == 4.15.0",  # needed by beautifulsoup4
 	"beautifulsoup4 == 4.14.3",
-	"regex == 2025.11.3",
-    "kovidgoyal-langtool == 1.2.0",
+	"regex == 2026.11.9",
+    "kovidgoyal-langtool == 1.3.0",
 	"chardet == 5.2.0",
 	"msgpack == 1.2.3",
 	"Pygments == 2.20.0",
@@ -95,7 +95,7 @@ requires = [
 dev = [
     "ruff >= 0.16.0",
     "types-lxml >= 2026.2.16",
-    "ty >= 0.0.59",
+    "ty >= 0.0.100",
     "rapydscript-ng >= 0.8.5",
     "clang-format >= 22.1.8",
 ]
@@ -288,8 +288,9 @@ ignore = [
 "src/calibre/{rpdb,utils/ipython}.py" = ['T1']
 "src/qt/*.py" = ['I', 'blank-lines-top-level']
 "src/qt/*.pyi" = ['I']
-"src/{odf,qt,calibre/{gui2}}/*" = ['ANN']
+"src/calibre/gui2/*" = ['ANN']
 "{manual,setup,stubs}/*" = ['ANN']
+"src/{odf,qt}/*" = ['ANN']
 # These modules wrap a browser, whose operations can all block indefinitely on
 # the network, so every one of them takes an explicit timeout
 "src/calibre/web/automate/{camoufox,recipes}.py" = ['async-function-with-timeout']

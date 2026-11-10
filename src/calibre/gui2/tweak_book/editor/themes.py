@@ -122,6 +122,7 @@ SOLARIZED = '''
 
     Error        us=wave uc={red}
     SpellError   us=wave uc={orange}
+    GrammarError us=wave uc={violet}
     Tooltip      fg=black bg=ffffed
     Link         fg={blue}
     BadLink      fg={cyan} us=wave uc={red}
@@ -165,6 +166,7 @@ THEMES = {
     Special      fg={special}
     Error        us=wave uc=red
     SpellError   us=wave uc=orange
+    GrammarError us=wave uc=5fafff
     SpecialCharacter bg=666666
     Link         fg=cyan
     BadLink      fg={string} us=wave uc=red
@@ -215,6 +217,7 @@ THEMES = {
     SpecialCharacter bg=afafaf
     Error        us=wave uc=red
     SpellError   us=wave uc=magenta
+    GrammarError us=wave uc=0060c0
     Link         fg=blue
     BadLink      fg={string} us=wave uc=red
 
@@ -379,10 +382,10 @@ def all_theme_names():
 
 
 class CreateNewTheme(Dialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         Dialog.__init__(self, _('Create custom theme'), 'custom-theme-create', parent=parent)
 
-    def setup_ui(self):
+    def setup_ui(self) -> None:
         self.l = l = QFormLayout(self)
         self.setLayout(l)
 
@@ -423,7 +426,7 @@ def col_to_string(color):
 class ColorButton(QPushButton):
     changed = pyqtSignal()
 
-    def __init__(self, data, name, text, parent):
+    def __init__(self, data, name, text, parent) -> None:
         QPushButton.__init__(self, text, parent)
         self.ic = QPixmap(self.iconSize())
         color = data[name]
@@ -438,7 +441,7 @@ class ColorButton(QPushButton):
         self.setIcon(QIcon(self.ic))
         self.clicked.connect(self.choose_color)
 
-    def clear(self):
+    def clear(self) -> None:
         self.current_color = None
         self.update_tooltip()
         self.ic.fill(Qt.GlobalColor.transparent)
@@ -446,7 +449,7 @@ class ColorButton(QPushButton):
         self.data[self.name] = self.value
         self.changed.emit()
 
-    def choose_color(self):
+    def choose_color(self) -> None:
         col = QColorDialog.getColor(self.current_color or Qt.GlobalColor.black, self, _('Choose color'))
         if col.isValid():
             self.current_color = col
@@ -456,7 +459,7 @@ class ColorButton(QPushButton):
             self.data[self.name] = self.value
             self.changed.emit()
 
-    def update_tooltip(self):
+    def update_tooltip(self) -> None:
         self.setToolTip(_('Red: {0} Green: {1} Blue: {2}').format(*self.current_color.getRgb()[:3]) if self.current_color else _('No color'))
 
     @property
@@ -469,13 +472,13 @@ class ColorButton(QPushButton):
 class Bool(QCheckBox):
     changed = pyqtSignal()
 
-    def __init__(self, data, key, text, parent):
+    def __init__(self, data, key, text, parent) -> None:
         QCheckBox.__init__(self, text, parent)
         self.data, self.key = data, key
         self.setChecked(data.get(key, False))
         self.stateChanged.connect(self._changed)
 
-    def _changed(self, state):
+    def _changed(self, state) -> None:
         self.data[self.key] = self.value
         self.changed.emit()
 
@@ -487,7 +490,7 @@ class Bool(QCheckBox):
 class Property(QWidget):
     changed = pyqtSignal()
 
-    def __init__(self, name, data, parent=None):
+    def __init__(self, name, data, parent=None) -> None:
         QWidget.__init__(self, parent)
         self.l = l = QHBoxLayout(self)
         self.setLayout(l)
@@ -529,7 +532,7 @@ class Property(QWidget):
         l.addLayout(h)
         l.addStretch(1)
 
-    def us_changed(self):
+    def us_changed(self) -> None:
         self.data['underline'] = str(self.underline.currentText()) or None
         self.changed.emit()
 
@@ -587,6 +590,9 @@ the color of the blinking cursor.</p>
 {SpellError}
     Misspelled words such as <span lang="en">thisword</span>
 
+{GrammarError}
+    Grammar issues such as <span lang="en">She go home</span>
+
 {Comment}
     Comments like <!-- this one -->
 
@@ -605,10 +611,10 @@ p.someclass {{
 
 
 class ThemeEditor(Dialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         Dialog.__init__(self, _('Create/edit custom theme'), 'custom-theme-editor', parent=parent)
 
-    def setup_ui(self):
+    def setup_ui(self) -> None:
         self.block_show = False
         self.properties = []
         self.l = l = QVBoxLayout(self)
@@ -659,6 +665,7 @@ class ThemeEditor(Dialog):
                 'SpecialCharacter',
                 'Error',
                 'SpellError',
+                'GrammarError',
                 'Comment',
             )
         }
@@ -693,7 +700,7 @@ class ThemeEditor(Dialog):
             tprefs['custom_themes'][name] = data
         return data
 
-    def show_theme(self):
+    def show_theme(self) -> None:
         if self.block_show:
             return
         for c in self.properties:
@@ -721,12 +728,12 @@ class ThemeEditor(Dialog):
     def theme_name(self):
         return str(self.theme.currentText())
 
-    def changed(self):
+    def changed(self) -> None:
         name = self.theme_name
         data = self.update_theme(name)
         self.preview.apply_theme(read_custom_theme(data))
 
-    def create_new_theme(self):
+    def create_new_theme(self) -> None:
         d = CreateNewTheme(self)
         if d.exec() == QDialog.DialogCode.Accepted:
             name = '*' + d.theme_name
@@ -743,7 +750,7 @@ class ThemeEditor(Dialog):
             self.block_show = False
             self.show_theme()
 
-    def remove_theme(self):
+    def remove_theme(self) -> None:
         name = self.theme_name
         if name:
             tprefs['custom_themes'].pop(name, None)

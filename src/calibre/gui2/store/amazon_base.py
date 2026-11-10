@@ -38,21 +38,16 @@ class AmazonStore:
     KINDLE_EDITION = 'Kindle Edition'
     DETAILS_URL = 'https://amazon.com/dp/'
     STORE_LINK = 'https://www.amazon.com/Kindle-eBooks'
-    DRM_SEARCH_TEXT = 'Simultaneous Device Usage'
-    DRM_FREE_TEXT = 'Unlimited'
     FIELD_KEYWORDS = 'k'
 
-    def open(self, gui, parent=None, detail_item=None, external=False):
+    def open(self, gui, parent=None, detail_item=None, external=False) -> None:
         store_link = get_method('get_store_link_amazon')(self, detail_item)
         open_url(QUrl(store_link))
 
     def search(self, query, max_results=10, timeout=60):
         yield from get_method('search_amazon')(self, query, max_results=max_results, timeout=timeout)
 
-    def get_details(self, search_result, timeout=60):
-        return get_method('get_details_amazon')(self, search_result, timeout)
-
-    def develop_plugin(self):
+    def develop_plugin(self) -> None:
         import sys
 
         for result in get_method('search_amazon')(self, ' '.join(sys.argv[1:]), write_html_to='/t/amazon.html'):

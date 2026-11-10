@@ -355,7 +355,7 @@ class KINDLE(USBMS):
             else:
                 mi.comments = prettify(user_notes_soup)
             # Update library comments
-            db.set_comment(db_id, mi.comments)  # ty: ignore[unresolved-attribute] legacy setter added dynamically in calibre.db.legacy
+            db.set_comment(db_id, mi.comments)  # ty: ignore[missing-attribute] legacy setter added dynamically in calibre.db.legacy
 
             # Add bookmark file to db_id
             db.add_format_with_hooks(db_id, bm.value.bookmark_extension, bm.value.path, index_is_id=True)
@@ -539,9 +539,10 @@ class KINDLE2(KINDLE):
         if device_info is None:
             return
         product_id = device_info[1]
-        if product_id is not None and product_id > 0x3:
+        main_prefix = self._main_prefix
+        if product_id is not None and product_id > 0x3 and main_prefix:
             # Check if we need to put the apnx into a sidecar dir
-            for _, dirnames, _ in os.walk(self._main_prefix):
+            for _, dirnames, _ in os.walk(main_prefix):
                 for x in dirnames:
                     if x.endswith('.sdr'):
                         self.sidecar_apnx = True
