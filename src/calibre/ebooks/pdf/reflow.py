@@ -6,7 +6,7 @@ import re
 import sys
 from html import escape
 from operator import attrgetter
-from typing import IO, TYPE_CHECKING, cast
+from typing import IO, TYPE_CHECKING, NamedTuple, cast
 
 from lxml import etree
 
@@ -31,6 +31,13 @@ if TYPE_CHECKING:
 # How many pages/lines to scan when finding header/footer automatically
 PAGE_SCAN_COUNT = 20  # Arbitrary
 LINE_SCAN_COUNT = 2  # Arbitrary
+
+# A line at the top or bottom of pages containing the page number is a running
+# head or foot if it has at most this many words, and the page number is found
+# like that on at least this many pages, and this fraction of all pages
+RUNNING_HEAD_MAX_WORDS = 12
+RUNNING_HEAD_MIN_PAGES = 3
+RUNNING_HEAD_MIN_FRACTION = 0.1
 
 # Number of character widths that two strings have to be apart,
 # for them to be considered part of the same text fragment
@@ -68,9 +75,36 @@ ORPHAN_LINES = 5
 # is likely to be valid.  Somewhere between 1 and 2, probably nearer 2
 PARA_FACTOR = 1.8
 
+# Line and paragraph spacing are estimated only from the gaps between lines
+# that are both in the body text font size, provided at least this fraction of
+# all the gaps between lines are of that kind. Otherwise there are too few of
+# them to be representative, so all gaps between lines are used.
+BODY_LINE_SPACES_FRACTION = 0.25
+
+# Gaps between lines within SAME_SPACE of the most common gap are part of the
+# same spacing if they are at least this fraction as common
+SPACING_BAND_FRACTION = 0.25
+
+# The gaps in a spacing other than the line spacing must occur at least this
+# many times to be the paragraph spacing, or the line spacing when they are
+# smaller than the most common gaps
+PARA_SPACE_MIN_COUNT = 3
+# And at least this fraction as often as those in the line spacing, if larger
+PARA_SPACE_MIN_FRACTION = 0.03
+# Or this fraction, if smaller
+SMALLER_LINE_SPACE_MIN_FRACTION = 0.1
+
 # Multiplies the gap between paragraphs to determine if this is a section break
 # not a paragraph break
 SECTION_FACTOR = 1.3
+
+# Text whose font is at least this much larger than the body text is set in a
+# heading font. 1.1 = 110%
+HEADING_FONT_FACTOR = 1.1
+
+# A line no wider than this fraction of the widest text in its column is short
+# enough to be a title rather than a line of wrapped prose. 0.7 = 70%
+SHORT_TITLE_FACTOR = 0.7
 
 # Multiplies the average line height when determining row height
 # of a particular element to detect columns.
@@ -109,11 +143,44 @@ RIGHT_FACTOR = 1.8
 # and still be considered centered. 0.15 = 15%
 CENTER_FACTOR = 0.15
 
+# The end of a sentence or a label, but not leader dots, and text that is just
+# numbers, such as page numbers
+SENTENCE_END = re.compile(r'(?<![.\s])[.!?:][”’"\')\]]*\s*$')
+_NUMBER = r'(?:(?:[a-z][-.])?\d+|(?=[ivxlcdm])m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3}))'
+# The largest gap, in spaces, after the end of a sentence in justified text
+SENTENCE_GAP = 4
+NUMBERING = re.compile(rf'[\s(\[–—-]*{_NUMBER}(?:[\s/.,:–—-]+{_NUMBER})*[\s.)\]–—-]*', re.IGNORECASE)
+
+# The bullet or number of a list item
+LIST_LABEL = re.compile(r'\s*(?:[•◦‣▪●○■□–—*-]|\(?(?:\d+(?:\.\d+)*|[a-z]|[ivxlcdm]+)[.)])\s*', re.IGNORECASE)
+
+# An entry in a table of contents, ending with leader dots and a page number
+CONTENTS_ENTRY = re.compile(rf'(?:\.\s*){{3,}}{_NUMBER}\s*$', re.IGNORECASE)
+
 # How near does text right need to be to right margin
 # to be considered right aligned. 0.05 = 5%
 RIGHT_FLOAT_FACTOR = 0.05
 
 #### Indents and line spacing
+# Paragraphs are indented by the most common left of the first lines of
+# paragraphs, if there are at least this many of them, and they are at least
+# this fraction of the lines with that left
+FIRST_LINE_INDENT_MIN_COUNT = 5
+FIRST_LINE_INDENT_MIN_FRACTION = 0.5
+# The first line of a paragraph that continues onto the next line reaches at
+# least this fraction of the way across the text on the page
+FIRST_LINE_MIN_WIDTH_FRACTION = 0.8
+# Text larger than the body, such as headings, wrapped onto at most this many
+# lines is joined
+WRAPPED_LARGE_TEXT_MAX_LINES = 3
+
+# Fonts of code
+MONOSPACE_FAMILY = re.compile(r'mono|courier|cmtt|consol|typewriter|nimbusmon', re.IGNORECASE)
+
+# A left at which at least this many lines start is where lines are aligned,
+# so long lines starting there are not centered
+COMMON_LEFT_MIN_COUNT = 10
+
 # How near must pixel values be to appear the same
 SAME_SPACE = 3.0
 SAME_INDENT = 2.0
@@ -142,6 +209,72 @@ def adjacent_quotes(first_string: str, second_string: str) -> bool:
     return bool((last_char == '"' and first_char == '"') or (last_char == '’' and first_char == '‘') or (last_char == '”' and first_char == '“'))
 
 
+class SpacingBand(NamedTuple):
+    bottom: float  # The smallest gap in the band
+    peak: float  # The most common gap
+    top: float  # The largest gap in the band
+    count: int  # The number of gaps in the band
+
+
+def spacing_band(spaces: dict[float, int]) -> SpacingBand:
+    """
+    A spacing is not a single value, as rounding and inline text in other
+    fonts spread it over a few nearby values, e.g. 18, 19 and 20. The band
+    is the most common gap (the smaller of equally common ones) and the gaps
+    close to it that are common enough to be part of the same spacing.
+    """
+    peak = max(spaces, key=lambda s: (spaces[s], -s))
+    minimum = SPACING_BAND_FRACTION * spaces[peak]
+    members = [s for s, c in spaces.items() if abs(s - peak) <= SAME_SPACE and c >= minimum]
+    return SpacingBand(min(members), peak, max(members), sum(spaces[s] for s in members))
+
+
+def line_and_para_space(spaces: dict[float, int]) -> tuple[float, float]:
+    """
+    The line and paragraph spacing from the numbers of times each gap between
+    the tops of consecutive lines occurs.
+
+    The most common spacing is usually the line spacing, and the most common
+    one outside it the paragraph spacing. But with many short paragraphs the
+    most common is the paragraph spacing, so the smaller of the two is the
+    line spacing. The line spacing is the largest gap in its band, as it is
+    the limit for joining lines. The paragraph spacing is the most common gap
+    in its band, as it is multiplied up to find gaps that are larger than
+    usual between paragraphs.
+    """
+    line_space: float = 0
+    para_space: float = 0
+    if spaces:
+        line = spacing_band(spaces)
+        line_space = line.top
+        # Gaps up to the limit for joining lines are not paragraph gaps, even
+        # if not in the line spacing band, as when lines with inline text in
+        # another font are spaced differently
+        others = {s: c for s, c in spaces.items() if s < line.bottom - SAME_SPACE or s > line.top * (1 + LINE_FACTOR)}
+        if others:
+            other: SpacingBand | None = spacing_band(others)
+            if other.peak < line.peak:
+                if other.count >= max(PARA_SPACE_MIN_COUNT, SMALLER_LINE_SPACE_MIN_FRACTION * line.count):
+                    # Paragraphs are not closer together than lines, so this
+                    # is the line spacing, though less common, as when most
+                    # paragraphs are a single line
+                    line_space, para_space = other.top, line.peak
+                else:
+                    # Too rare, so look for the paragraph spacing above
+                    others = {s: c for s, c in others.items() if s > line.peak}
+                    other = spacing_band(others) if others else None
+            # Rarer than this, it is not paragraph spacing, as when paragraphs
+            # are indented rather than spaced
+            if not para_space and other is not None and other.count >= max(PARA_SPACE_MIN_COUNT, PARA_SPACE_MIN_FRACTION * line.count):
+                para_space = other.peak
+    # Some docs have no great distinction for paragraphs. Limit the size of
+    # the gap, or section breaks are not found.
+    max_para_space = round(line_space * PARA_FACTOR)
+    if not para_space or para_space > max_para_space:
+        para_space = max_para_space
+    return line_space, para_space
+
+
 class Font:
     def __init__(self, spec: _Element) -> None:
         self.id = spec.get('id')
@@ -149,6 +282,7 @@ class Font:
         self.size_em = 0.0
         self.color = spec.get('color')
         self.family = spec.get('family')
+        self.monospace = MONOSPACE_FAMILY.search(self.family or '') is not None
 
 
 class Element:
@@ -188,6 +322,11 @@ class DocStats:
         self.left_max_even: float = 0
         self.indent_max_odd: float = 0
         self.indent_max_even: float = 0
+        # Whether most text is in a monospaced font
+        self.monospace_body = False
+        # Lefts at which many lines start, such as of code or list items
+        self.common_lefts_odd: list[float] = []
+        self.common_lefts_even: list[float] = []
 
 
 class Image(Element):
@@ -250,6 +389,9 @@ class Text(Element):
         # When joining lines for a paragraph, remember position of last line joined
         self.last_left: float = self.left
         self.last_right: float = self.right
+        # Where the lines after the first of a list item start, that is after
+        # its bullet or number, if the text is a list item
+        self.hanging_left: float | None = None
         # Remember the length of this line if it is merged into a paragraph
         self.final_width: float = self.width
         # Align = Left, Right, Center, Justified.  Default L
@@ -257,6 +399,8 @@ class Text(Element):
         # Should there be extra space before/after paragraph?
         self.blank_line_before = 0
         self.blank_line_after = 0
+        # Number of lines joined into this text
+        self.line_count = 1
 
         self.font: Font
         if self.font_map:
@@ -270,6 +414,11 @@ class Text(Element):
             self.font_size = 0.0
             self.font_size_em = 0.0
             # self.color = 0
+        # Whether all the text is in a monospaced font, such as code
+        self.monospace: bool = bool(self.font_map) and self.font.monospace
+        # Font size of the start of the text, font_size_em becomes the largest
+        # size when texts are coalesced
+        self.start_font_size_em = self.font_size_em
 
         text.tail = ''
         self.text_as_string = etree.tostring(text, method='text', encoding='unicode')
@@ -295,9 +444,11 @@ class Text(Element):
     def set_av_char_width(self) -> None:
         self.average_character_width = max(0.1, self.width / max(1, len(self.text_as_string)))  # Ensure never zero
 
-    def coalesce(self, other: Text, page_number: int, left_margin: float, right_margin: float) -> None:
+    def coalesce(self, other: Text, page_number: int, left_margin: float, right_margin: float, same_line: bool = False) -> None:
         if self.opts.verbose > 2:
             self.log.debug(f'Coalescing {self.text_as_string!r} with {other.text_as_string!r} on page {page_number}')
+        if same_line and self.hanging_left is None and LIST_LABEL.fullmatch(self.text_as_string) is not None:
+            self.hanging_left = other.left
         # Need to work out how to decide this
         # For elements of the same line, is there a space between?
         has_float = ''
@@ -315,6 +466,7 @@ class Text(Element):
         # In this case, don't use their top/bottom
         if other.left >= self.right:
             # Same line
+            self.line_count += other.line_count - 1
             if self.top > other.top:
                 pass
             elif self.bottom < other.bottom:
@@ -326,13 +478,20 @@ class Text(Element):
                 self.top = other.top
                 self.bottom = other.bottom
         else:
+            self.line_count += other.line_count
             self.top = min(self.top, other.top)
             self.bottom = max(self.bottom, other.bottom)
 
+        # final_width, last_left and last_right are the width and position
+        # of the final line of the text
+        if same_line:
+            self.last_right = max(self.last_right, other.right)
+        else:
+            self.last_left, self.last_right = other.last_left, other.last_right
+        self.final_width = self.last_right - self.last_left
         self.left = min(self.left, other.left)
         self.right = max(self.right, other.right)
         self.width += other.width
-        self.final_width = other.left + other.width
         self.height = self.bottom - self.top
         # Need to check for </span> <span... as well
         # This test does not work in its present form
@@ -365,6 +524,7 @@ class Text(Element):
 
         self.font_size = max(self.font_size, other.font_size)
         self.font_size_em = max(self.font_size_em, other.font_size_em)
+        self.monospace = self.monospace and other.monospace
         self.font = other.font
         if has_gap > 0:
             if has_gap < 3:  # Small number of spaces = 1 space
@@ -379,8 +539,15 @@ class Text(Element):
                     has_gap = 0
             # Float right if the text ends around the right margin,
             # and there are no long groups of spaces earlier in the line
-            # as that probably means justified text.
-            elif '   ' not in self.text_as_string and other.right > right_margin - right_margin * RIGHT_FLOAT_FACTOR:
+            # as that probably means justified text. Nor after the end of a
+            # sentence or a label followed by words rather than numbers, as
+            # justification often widens the space after a sentence enough
+            # for it to be a separate fragment.
+            elif (
+                '   ' not in self.text_as_string
+                and other.right > right_margin - right_margin * RIGHT_FLOAT_FACTOR
+                and not (has_gap <= SENTENCE_GAP and SENTENCE_END.search(self.text_as_string) is not None and NUMBERING.fullmatch(other.text_as_string) is None)
+            ):
                 has_float = '<span style="float:right">'
                 has_gap = 1
                 # else leave has_gap
@@ -836,6 +1003,8 @@ class Page:
         self.top, self.left, self.width, self.height = float_attrs(page, 'top', 'left', 'width', 'height')
         self.id = f'page{self.number}'
         self.page_break_after = False
+        # Does the previous page end part way through a sentence?
+        self.starts_mid_sentence = False
 
         self.texts: list[Text] = []
         self.imgs: list[Image] = []
@@ -1131,7 +1300,7 @@ class Page:
                             and frag.text_as_string[-1] == match.text_as_string[0]
                         ):
                             break  # Overlapping same character, so ignore it
-                    frag.coalesce(match, self.number, self.left_margin, self.right_margin)
+                    frag.coalesce(match, self.number, self.left_margin, self.right_margin, same_line=True)
                     break  # Leave tind
                 tind += 1
             if match is not None:
@@ -1153,10 +1322,14 @@ class Page:
         indent_max = self.stats_indent_max
 
         m = len(self.texts)
+        column_widths: dict[tuple[int, int], float] = {}
+        for t in self.texts:
+            column_widths[t.column] = max(column_widths.get(t.column, 0), t.right - t.left)
         for i in range(m):
             t = self.texts[i]
             lmargin = t.last_left  # Allow for lines joined into a para
-            if t.bottom - t.top > stats.line_space * 2:
+            multiline = t.line_count > 1
+            if multiline:
                 rmargin = self.width - t.last_right  # Right of a coalesced paragraph
             else:
                 rmargin = self.width - t.right  # Right of a coalesced line
@@ -1177,9 +1350,15 @@ class Page:
             if (
                 (lmargin < indent_min or lmargin > indent_max)
                 and lmargin > left_max
+                # Long lines starting where many others do, such as code, are
+                # aligned there, not centered
+                and not (t.right - t.left > self.textwidth / 3 and any(abs(lmargin - k) <= SAME_INDENT for k in self.stats_common_lefts))
                 and lmargin not in {xmargin, ymargin}
                 and lmargin >= rmargin - rmargin * CENTER_FACTOR
                 and lmargin <= rmargin + rmargin * CENTER_FACTOR
+                # All the lines of a centered paragraph are centered, not just
+                # its last one, which can end anywhere
+                and (not multiline or abs(t.left - (self.width - t.right)) <= (self.width - t.right) * CENTER_FACTOR)
                 and '"float:right"' not in t.raw
             ):
                 # and t.left + t.width + t.left >= self.width + l_offset - t.average_character_width \
@@ -1205,10 +1384,10 @@ class Page:
                 # Check for 'Chapter' or a centered word at the top of the page
                 # Some PDFs have chapter starts within the page so this check often fails
                 elif (
-                    re.match(r'(?i)^\s*chapter\s', t.text_as_string) is not None
-                    or re.match(r'(?i)^\s*prologue|epilogue\s*$', t.text_as_string) is not None
+                    self.is_chapter_heading(t, self.texts[i + 1] if i + 1 < m else None, first, column_widths[t.column], stats)
                     or (first and t.align == 'C' and re.match(r'(?i)^\s*[a-z -]+\s*$', t.text_as_string) is not None)
-                    or (first and re.match(r'^\s*[A-Z -]+\s*$', t.text_as_string) is not None)
+                    # Not smaller text, such as labels in a figure
+                    or (first and (t.start_font_size_em == 0 or t.start_font_size_em >= 0.95) and re.match(r'^\s*[A-Z -]+\s*$', t.text_as_string) is not None)
                 ):
                     t.tag = 'h2'
             first = False
@@ -1220,12 +1399,85 @@ class Page:
             if lmargin > left_max and lmargin != indent_min and lmargin >= rmargin - rmargin * CENTER_FACTOR and lmargin <= rmargin + rmargin * CENTER_FACTOR:
                 i.align = 'C'
 
+    @property
+    def ends_mid_sentence(self) -> bool:
+        # Does the page end with text that stops part way through a sentence?
+        # Ignore trailing digits, as they are likely to be page numbers.
+        if not self.texts or (self.imgs and self.imgs[-1].bottom > self.texts[-1].bottom):
+            return False
+        return re.search(r'([^\W\d_]|[,;-])\s*$', self.texts[-1].text_as_string) is not None
+
+    def is_chapter_heading(self, t: Text, following: Text | None, first: bool, column_width: float, stats: DocStats) -> bool:
+        # Is this text a chapter, prologue or epilogue title? Body prose can
+        # also start with these words, so unless the text is just the bare word
+        # "prologue" or "epilogue", require a cue that it is set apart as a
+        # title rather than being part of a paragraph. following is the next
+        # text on the page and first is True for the first text on the page.
+        text = t.text_as_string
+        if re.match(r'(?i)^\s*(prologue|epilogue)\s*$', text) is not None:
+            return True
+        if re.match(r'(?i)^\s*(chapter\s|prologue\b|epilogue\b)', text) is None:
+            return False
+        if t.line_count > 3:  # Too long for a title, whatever its formatting
+            return False
+        if t.align == 'C' or t.start_font_size_em >= HEADING_FONT_FACTOR:
+            return True
+        # The remaining cues are weaker, so not if the text could be the end of
+        # a sentence continued from the previous page or one in mid sentence
+        if (first and self.starts_mid_sentence) or not text.lstrip()[:1].isupper():
+            return False
+        # A single short line, as wrapped prose fills the width of its column
+        if t.line_count == 1 and t.right - t.left <= column_width * SHORT_TITLE_FACTOR:
+            return True
+        # Set apart by gaps before and after it. The top of the page counts as
+        # a gap, as blank_line_before is never set for the first text on a page.
+        gap_after = following is not None and stats.para_space > 0 and following.bottom - t.bottom > stats.para_space * SECTION_FACTOR
+        return (first or t.blank_line_before > 0) and gap_after
+
     def coalesce_paras(self, stats: DocStats) -> None:
         # Join lines into paragraphs
         left_min = self.stats_left_min
         left_max = self.stats_left_max
         indent_min = self.stats_indent_min
         indent_max = self.stats_indent_max
+
+        def wrapped_large_text(self: Page, first_text: Text, second_text: Text, stats: DocStats) -> bool:
+            # Text in a larger font than the body, such as a heading, wrapped
+            # onto the next line, as its first word did not fit on this line.
+            # Its lines are further apart than those of the body, in
+            # proportion to its size, and it is often short and centered.
+            body_size = self.document_font_stats.most_common_size if self.document_font_stats is not None else 0
+            if body_size <= 0 or first_text.font_size < body_size * HEADING_FONT_FACTOR or second_text.font_size != first_text.font_size:
+                return False
+            size = first_text.font_size / body_size
+            if (
+                first_text.column != second_text.column
+                # Headings are short, and a single phrase, unlike rows of a
+                # table in a large font, with wide gaps between their cells
+                or first_text.line_count >= WRAPPED_LARGE_TEXT_MAX_LINES
+                or '   ' in first_text.text_as_string
+                or '   ' in second_text.text_as_string
+                or 'href=' in second_text.raw
+                or '"float:right"' in first_text.raw
+                or CONTENTS_ENTRY.search(first_text.text_as_string) is not None
+                or (first_text.monospace and second_text.monospace)
+            ):
+                return False
+            if second_text.top <= first_text.top or first_text.bottom + stats.line_space * size * (1 + LINE_FACTOR) < second_text.bottom:
+                return False
+            tolerance = max(SAME_INDENT, second_text.average_character_width)
+            same_left = abs(second_text.left - first_text.last_left) <= tolerance
+            same_centre = abs((second_text.left + second_text.right) - (first_text.last_left + first_text.last_right)) <= 2 * tolerance
+            if not same_left and not same_centre:
+                return False
+            first_word = re.match(r'\s*(\S+)', second_text.text_as_string)
+            if first_word is None:
+                return False
+            # The width of the text of the document, not just this page, which
+            # can have only a few lines, such as a title page
+            width = max(self.textwidth, self.stats_right - self.stats_left_min)
+            spare = width - (first_text.last_right - first_text.last_left)
+            return (len(first_word.group(1)) + 1) * second_text.average_character_width > spare
 
         def can_merge(self: Page, first_text: Text, second_text: Text, stats: DocStats) -> bool:
             # Can two lines be merged into one paragraph?
@@ -1236,6 +1488,22 @@ class Page:
             # The left can wander by a few (SAME_INDENT) pixels.
             # "float:left" occurs where there is a multi-line character, so indentation is messed up
             same_left = bool(first_text.last_left - SAME_INDENT <= second_text.left <= first_text.last_left + SAME_INDENT)
+            # Lines of a block of justified text reach the right of the text of
+            # the document, unlike the last line of a paragraph
+            full = first_text.last_right >= self.stats_right - first_text.average_character_width
+            # The continuation of a list item, unless its text starts at the
+            # indent of paragraphs, and it ends a sentence, when the next line
+            # can be the first line of a paragraph
+            continues_item = (
+                first_text.hanging_left is not None
+                and abs(second_text.left - first_text.hanging_left) <= SAME_INDENT
+                and not (
+                    indent_min - SAME_INDENT <= first_text.hanging_left <= indent_max + SAME_INDENT
+                    and SENTENCE_END.search(first_text.text_as_string) is not None
+                )
+            )
+            if wrapped_large_text(self, first_text, second_text, stats):
+                return True
             if (
                 (
                     (
@@ -1243,12 +1511,20 @@ class Page:
                         and (same_left or (second_text.left < first_text.last_left and (first_text.indented > 0 or '"float:left"' in first_text.raw)))
                     )
                     or (same_left and first_text.indented == 0 and second_text.left >= indent_min)
+                    or continues_item
                     or (same_left and first_text.indented == second_text.indented and second_text.indented > 1)
+                    # A block of text at the indent of paragraphs, rather than
+                    # one line paragraphs
+                    or (same_left and first_text.indented == 1 and full and SENTENCE_END.search(first_text.text_as_string) is None)
                     or (second_text.left >= first_text.last_left and second_text.bottom <= first_text.bottom)
                 )
                 and first_text.column == second_text.column
+                # Lines of code are not paragraphs, unless all the text is in
+                # the same monospaced font
+                and not (first_text.monospace and second_text.monospace and not stats.monospace_body)
                 and 'href=' not in second_text.raw
                 and '"float:right"' not in first_text.raw
+                and CONTENTS_ENTRY.search(first_text.text_as_string) is None
                 and first_text.bottom + stats.line_space + (stats.line_space * LINE_FACTOR) >= second_text.bottom
                 and first_text.final_width > self.width * self.opts.unwrap_factor
                 and not adjacent_quotes(first_text.text_as_string, second_text.text_as_string)
@@ -1277,9 +1553,6 @@ class Page:
 
                 if last_frag is not None and frag != last_frag and can_merge(self, last_frag, frag, stats):
                     last_frag.coalesce(frag, self.number, self.left_margin, self.right_margin)
-                    last_frag.last_left = frag.left
-                    last_frag.last_right = frag.right
-                    last_frag.final_width = frag.final_width
                     # Check for centred done later
                     match = frag
                     break  # Leave tind
@@ -1354,7 +1627,14 @@ class Page:
         self.remove_head_foot_regex(opts)
 
     def find_margins(
-        self, tops: dict[float, int], indents: dict[float, int], line_spaces: dict[float, int], bottoms: dict[float, int], rights: dict[float, int]
+        self,
+        tops: dict[float, int],
+        indents: dict[float, int],
+        first_line_indents: dict[tuple[float, float], int],
+        line_spaces: dict[float, int],
+        body_line_spaces: dict[float, int],
+        bottoms: dict[float, int],
+        rights: dict[float, int],
     ) -> None:
 
         # from collections import Counter
@@ -1366,9 +1646,19 @@ class Page:
         max_right: float = 0
         max_space: float = 0
         last_top: float = 0
+        last_font_size: float = 0
+        # Gaps between consecutive lines that are both in the body font size are
+        # also recorded separately, so that gaps between lines in a smaller or
+        # larger font, such as code, captions or headings, cannot be mistaken
+        # for the line or paragraph spacing of the body text.
+        body_size = self.document_font_stats.most_common_size if self.document_font_stats is not None else -1
+        # The first line of a paragraph that continues on the next line is full
+        text_left = min((t.left for t in self.texts), default=0)
+        text_right = max((t.right for t in self.texts), default=0)
+        full_right = text_left + FIRST_LINE_MIN_WIDTH_FRACTION * (text_right - text_left)
         # last_bottom = 0
         first = True
-        for text in self.texts:
+        for i, text in enumerate(self.texts):
             top = text.top
             left = text.left
             if round(left) != left:
@@ -1382,18 +1672,30 @@ class Page:
             else:
                 # Space from 1 line to the next
                 space = abs(top - last_top)
-                # Beware of multiple text on same line. These look like small spacing
-                if text.height <= space:
+                # Beware of multiple text on same line. These look like small
+                # spacing. The height is that of the font bounding box, which
+                # can be much more than the line spacing, so only half of it.
+                if text.height <= 2 * space:
                     line_spaces[space] = line_spaces.get(space, 0) + 1
+                    if text.font_size == body_size and last_font_size == body_size:
+                        body_line_spaces[space] = body_line_spaces.get(space, 0) + 1
                 elif not max_space:
                     max_space = space  # Remember first in case of short docs
 
             last_top = top
+            last_font_size = text.font_size
             max_bot = max(max_bot, text.bottom)
 
             max_right = max(max_right, text.right)
 
             indents[left] = indents.get(left, 0) + 1
+            # Full lines followed by a line further left, as the first line of
+            # an indented paragraph is, with the left of the line after them
+            if i + 1 < len(self.texts) and right >= full_right:
+                following = self.texts[i + 1]
+                following_left = round(following.left)
+                if following_left < left - SAME_INDENT and 0 < following.top - top <= 2 * max(text.height, 1):
+                    first_line_indents[(left, following_left)] = first_line_indents.get((left, following_left), 0) + 1
 
         if max_bot > 0:
             bottoms[max_bot] = bottoms.get(max_bot, 0) + 1
@@ -1530,7 +1832,7 @@ class Page:
     def update_font_sizes(self, stats: DocStats) -> None:
         # Font sizes start as pixels/points, but em is more useful
         for text in self.texts:
-            text.font_size_em = self.font_map[text.font.id].size_em
+            text.font_size_em = text.start_font_size_em = self.font_map[text.font.id].size_em
             if text.font_size_em not in {0.0, 1.0}:
                 text.raw = f'<span style="font-size:{text.font_size_em!s}em">{text.raw}</span>'
 
@@ -1543,12 +1845,14 @@ class Page:
             self.stats_indent_min = stats.indent_min_odd
             self.stats_indent_max = stats.indent_max_odd
             self.stats_right = stats.right  # Needs work
+            self.stats_common_lefts = stats.common_lefts_odd
         else:
             self.stats_left_min = stats.left_min_even
             self.stats_left_max = stats.left_max_even
             self.stats_indent_min = stats.indent_min_even
             self.stats_indent_max = stats.indent_max_even
             self.stats_right = stats.right  # Needs work
+            self.stats_common_lefts = stats.common_lefts_even
         self.stats_margin_px = stats.margin_px
 
         # Join lines to form paragraphs
@@ -1640,11 +1944,11 @@ class Page:
 
 
 class PDFDocument:
-    def __init__(self, xml: bytes, opts: Values, log: Log) -> None:
+    def __init__(self, xml: bytes, opts: Values, log: Log, pdf_path: str = '') -> None:
         from calibre.utils.xml_parse import safe_xml_fromstring
         # from calibre.rpdb import set_trace;  set_trace()
 
-        self.opts, self.log = opts, log
+        self.opts, self.log, self.pdf_path = opts, log, pdf_path
 
         # Check for a testable value
         if self.opts.pdf_header_regex is None:
@@ -1672,7 +1976,10 @@ class PDFDocument:
         self.tops: dict[float, int] = {}
         self.indents_odd: dict[float, int] = {}
         self.indents_even: dict[float, int] = {}
+        self.first_line_indents_odd: dict[tuple[float, float], int] = {}
+        self.first_line_indents_even: dict[tuple[float, float], int] = {}
         self.line_spaces: dict[float, int] = {}
+        self.body_line_spaces: dict[float, int] = {}
         self.bottoms: dict[float, int] = {}
         self.rights: dict[float, int] = {}
         self.font_sizes: dict[int, int] = {}
@@ -1686,19 +1993,23 @@ class PDFDocument:
             page.create_page_format(self.stats, self.opts)
 
         # Need to work out the header/footer automatically if opt < 0
-        if self.opts.pdf_header_skip < 0 or self.opts.pdf_footer_skip < 0:
+        auto_header, auto_footer = self.opts.pdf_header_skip < 0, self.opts.pdf_footer_skip < 0
+        if auto_header or auto_footer:
             self.find_header_footer()
 
         # Remove any header/footer
         if self.opts.pdf_header_skip > 0 or self.opts.pdf_footer_skip > 0:
             self.remove_header_footer()
+        self.remove_running_heads(auto_header, auto_footer)
 
         # Work out document dimensions from page format
         for page in self.pages:
             page.find_margins(
                 self.tops,
                 self.indents_odd if page.odd_even else self.indents_even,
+                self.first_line_indents_odd if page.odd_even else self.first_line_indents_even,
                 self.line_spaces,
+                self.body_line_spaces,
                 self.bottoms,
                 self.rights,
             )
@@ -1706,8 +2017,11 @@ class PDFDocument:
         self.setup_stats()
 
         # Joins lines etc. into paragraphs
+        prev_page: Page | None = None
         for page in self.pages:
+            page.starts_mid_sentence = prev_page is not None and prev_page.ends_mid_sentence
             page.second_pass(self.stats, self.opts)
+            prev_page = page
 
         # Join paragraphs across page boundaries
         self.merge_pages(idc)
@@ -1733,6 +2047,10 @@ class PDFDocument:
                     count[0] += 1
 
         for outline in self.root.xpath('./outline'):
+            if self.pdf_path:
+                from calibre.ebooks.pdf.pdftohtml import resolve_outline_pages
+
+                resolve_outline_pages(outline, self.pdf_path, self.log.warn)
             process_node(outline, root_toc_node)
         if count[0] > 2:
             root = create_ncx(root_toc_node, (lambda x: x), 'pdftohtml', 'en', 'pdftohtml')
@@ -1741,6 +2059,7 @@ class PDFDocument:
 
     def collect_font_statistics(self) -> None:
         self.font_size_stats: dict[float, float] = {}
+        total_chars = monospace_chars = 0
         for p in self.pages:
             for sz in p.font_size_stats:
                 chars = p.font_size_stats[sz]
@@ -1751,6 +2070,11 @@ class PDFDocument:
             for text in p.texts:
                 font = int(cast('str', text.font.id))  # pdftohtml always outputs fontspec ids
                 self.font_sizes[font] = self.font_sizes.get(font, 0) + 1
+                chars = len(text.text_as_string)
+                total_chars += chars
+                if text.monospace:
+                    monospace_chars += chars
+        self.stats.monospace_body = monospace_chars > total_chars / 2
 
         self.font_size_stats = FontSizeStats(self.font_size_stats)
 
@@ -1772,75 +2096,77 @@ class PDFDocument:
             f.size_em = round(f.size / self.stats.font_size, 2)
 
     def setup_stats(self) -> None:
-        # This probably needs more work on line spacing/para spacing
-        # Maybe sort the line_spaces array.
-        # It is possible to have more than 1 line space value, e.g. 8.0, 9.0, 10.0
-        # then more than 1 para space, e.g. 24.0, 25.0, 26.0
-        # Thus the count of a para space could be > the most popular line space.
-        # So, probably need to find the max line space and max para space
-        # rather than simply the most popular.
-        # At the moment it only does this when spaces are close in popularity.
-
-        # Find (next) most popular gap between lines
-        def find_line_space(skip: int) -> tuple[int, float]:
-            scount: int = 0
-            soffset: float = 0
-            for s in self.line_spaces:
-                if scount <= self.line_spaces[s] and (skip <= 0 or self.line_spaces[s] < skip):
-                    scount = self.line_spaces[s]
-                    soffset = s
-            return scount, soffset
+        # Line and paragraph spacing are properties of the body text. Gaps
+        # between lines of other sizes (code listings, captions, footnotes)
+        # can be frequent enough to be taken for the paragraph gap, and then
+        # swapped in as the line gap, splitting every body line into its own
+        # paragraph. So use only the gaps between body text lines, unless there
+        # are too few of them, for example, when most body text lines contain
+        # some text in a larger font.
+        body_count = sum(self.body_line_spaces.values())
+        use_body = body_count > 0 and body_count >= BODY_LINE_SPACES_FRACTION * sum(self.line_spaces.values())
+        line_spaces = self.body_line_spaces if use_body else self.line_spaces
 
         # Find (next) most popular indent
         def find_indent(indents: dict[float, int]) -> float:
+            # The most common left, the smaller of equally common ones
             icount: int = 0
             ioffset: float = 0
             for i, ii in indents.items():
-                if ii > 0 and icount <= ii:
+                if ii > 0 and (icount < ii or (icount == ii and i < ioffset)):
                     icount = ii
                     ioffset = i
             return ioffset
 
-        def set_indents(indents: dict[float, int], odd_even: int) -> None:
+        def indent_cluster(indents: dict[float, int]) -> tuple[float, float, int]:
+            # The most common left and those close to it, which are hidden so
+            # that they are not found again. Returns the smallest and largest
+            # left of the cluster and the number of lines in it.
+            mode = find_indent(indents)
+            low = high = mode
+            count = 0
+            for k, kc in indents.items():
+                if kc > 0 and abs(mode - k) <= SAME_INDENT:
+                    low, high = min(low, k), max(high, k)
+                    count += kc
+                    indents[k] = -kc  # Ensure not found again
+            return low, high, count
+
+        def set_indents(indents: dict[float, int], first_line_indents: dict[tuple[float, float], int], odd_even: int) -> None:
+            all_indents = indents.copy()
             # Find most popular left so that will be treated as left of page
-            left_k1 = left_c = 0
-            left_k = find_indent(indents)
-            # Find any adjacent indents and hide them
-            for k, kc in indents.items():
-                if kc > 0 and abs(left_k - k) <= SAME_INDENT:
-                    left_k = min(left_k, k)
-                    left_k1 = max(left_k1, k)
-                    left_c += kc
-                    indents[k] = -kc  # Ensure not found again
+            left_k, left_k1, left_c = indent_cluster(indents)
 
-            # Find second most popular left so that will be treated as indent
-            indent_k1 = indent_c = 0
-            indent_k = find_indent(indents)
-            # Find any adjacent indents and hide them
-            for k, kc in indents.items():
-                if kc > 0 and abs(indent_k - k) <= SAME_INDENT:
-                    indent_k = min(indent_k, k)
-                    indent_k1 = max(indent_k1, k)
-                    indent_c += kc
-                    indents[k] = -kc  # Ensure not found again
+            # The indent of paragraphs is the most common left of their first
+            # lines, those followed by a line at the left margin. Code,
+            # quotations, lists and the like can be more common than those,
+            # so they are only used if they are most of the lines at that left,
+            # otherwise there are no indented paragraphs to tell from them.
+            first_lines: dict[float, int] = {}
+            for (k, following), c in first_line_indents.items():
+                if k > left_k1 + SAME_INDENT and left_k - SAME_INDENT <= following <= left_k1 + SAME_INDENT:
+                    first_lines[k] = first_lines.get(k, 0) + c
+            first_k = first_k1 = 0.0
+            if first_lines:
+                first_k, first_k1, first_c = indent_cluster(first_lines)
+                lines_c = sum(c for k, c in all_indents.items() if first_k <= k <= first_k1)
+                if first_c < FIRST_LINE_INDENT_MIN_COUNT or first_c < FIRST_LINE_INDENT_MIN_FRACTION * lines_c:
+                    first_k = first_k1 = 0
+            if first_k:
+                indent_k, indent_k1 = first_k, first_k1
+            else:
+                # Find second most popular left so that will be treated as indent
+                indent_k, indent_k1, indent_c = indent_cluster(indents)
 
-            # Find third most popular left as that might actually be the indent
-            # if between left and current and occurs a reasonable number of times.
-            third_k1 = third_c = 0
-            third_k = find_indent(indents)
-            # Find any adjacent indents and hide them
-            for k, kc in indents.items():
-                if kc > 0 and abs(third_k - k) <= SAME_INDENT:
-                    third_k = min(third_k, k)
-                    third_k1 = max(third_k1, k)
-                    third_c += kc
-                    indents[k] = -kc  # Ensure not found again
+                # Find third most popular left as that might actually be the indent
+                # if between left and current and occurs a reasonable number of times.
+                third_k, third_k1, third_c = indent_cluster(indents)
 
-            # Is this to be used?
-            if third_k > 0 and third_k < indent_k and third_k > left_k and third_c > indent_c / 2:
-                # The unusual case. The third ones found are to be used
-                indent_k = third_k
-                indent_k1 = third_k1
+                # Is this to be used?
+                if third_k > 0 and third_k < indent_k and third_k > left_k and third_c > indent_c / 2:
+                    # The unusual case. The third ones found are to be used
+                    indent_k = third_k
+                    indent_k1 = third_k1
 
             # Check that we have data in variables
             if not indent_k:
@@ -1898,9 +2224,11 @@ class PDFDocument:
         # Some PDFs have alternating pages with different lefts/indents.
         # Always separate odd and even, though they are usually the same.
         # Find most left/indent for odd pages
-        set_indents(self.indents_odd, 1)
+        for lefts, common in ((self.indents_odd, self.stats.common_lefts_odd), (self.indents_even, self.stats.common_lefts_even)):
+            common.extend(k for k, c in lefts.items() if c >= COMMON_LEFT_MIN_COUNT)
+        set_indents(self.indents_odd, self.first_line_indents_odd, 1)
         # Find most left/indent for even pages
-        set_indents(self.indents_even, 0)
+        set_indents(self.indents_even, self.first_line_indents_even, 0)
 
         # Find farthest right so that will be treated as page right
         ## SHOULD DO RIGHT2 as well
@@ -1924,58 +2252,7 @@ class PDFDocument:
             # Assume for both if self.stats.indent_min_even - self.stats.left_min_even > (self.stats.right - self.stats.left_min_even) * 0.10:    # 10%
             self.stats.indent_min_even = self.stats.indent_max_even = self.stats.left_min_even
 
-        # Sort spaces into ascending order then loop through.
-        # Lowest value(s) are line spacing, next are para
-        # Spaces not yet set up
-        self.stats.line_space = self.stats.para_space = -1.0
-        # Find spacing values
-        # Find most popular space so that will be treated as line space
-        line_k = 0
-        line_c = 0
-        count = len(self.line_spaces)
-        while count > 0:
-            c, k = find_line_space(line_c)
-            if line_c <= 0:
-                line_c = c
-            if line_k <= 0:
-                line_k = k
-            elif abs(line_k - k) <= SAME_SPACE:
-                line_k = max(line_k, k)
-                line_c = min(line_c, c)
-            else:
-                break
-            count -= 1
-
-        # Get the next most popular gap
-        para_c = line_c - 1
-        para_k = 0
-        count = len(self.line_spaces)
-        while count > 0:
-            c, k = find_line_space(para_c)
-            if para_k <= 0:
-                para_k = k
-            if abs(para_k - k) <= SAME_SPACE:
-                para_k = max(para_k, k)
-                para_c = min(para_c, c)
-            else:
-                break
-            count -= 1
-
-        # For safety, check present and in the right order
-        if not para_k or para_k == line_k:
-            para_k = round(line_k * PARA_FACTOR)
-        if line_k > para_k:
-            x = para_k
-            para_k = line_k
-            line_k = x
-
-        self.stats.line_space = line_k
-        # Some docs have no great distinction for paragraphs
-        # Limit the size of the gap, or section breaks not found
-        if para_k > round(line_k * PARA_FACTOR):
-            self.stats.para_space = round(line_k * PARA_FACTOR)
-        else:
-            self.stats.para_space = para_k
+        self.stats.line_space, self.stats.para_space = line_and_para_space(line_spaces)
 
         # Find the max bottom so that will be treated as bottom of page
         # Or most popular bottom?  Or the max used value within 10% of max value?
@@ -2117,6 +2394,69 @@ class PDFDocument:
         if foot_skip > 0:
             self.opts.pdf_footer_skip = foot_skip
 
+    def remove_running_heads(self, header: bool, footer: bool) -> None:
+        """
+        Remove lines at the top or bottom of pages that contain the page
+        number, such as the running heads of books, which can change from
+        page to page, for example with the chapter title, so they are not
+        found by find_header_footer(). They are recognised by the number
+        being at the start or end of a short line outside the area of the
+        page where the body text usually is, and differing from the position
+        of its page in the document by the same amount on many pages, whether
+        at the top or the bottom of the page, as books often have page
+        numbers at the bottom of pages starting chapters, and at the top of
+        the others.
+        """
+        # (page index, page, the texts of the line, whether at the top, page number)
+        candidates: list[tuple[int, Page, list[Text], bool, int]] = []
+        body_tops: dict[float, int] = {}
+        body_bottoms: dict[float, int] = {}
+        for idx, page in enumerate(self.pages):
+            if not page.texts:
+                continue
+            ends: list[tuple[bool, list[Text]]] = []
+            if header:
+                top = min(t.top for t in page.texts)
+                ends.append((True, [t for t in page.texts if abs(t.top - top) <= SAME_SPACE]))
+            if footer:
+                bottom = max(t.bottom for t in page.texts)
+                ends.append((False, [t for t in page.texts if abs(t.bottom - bottom) <= SAME_SPACE]))
+            in_candidates: set[int] = set()
+            for at_top, line in ends:
+                words = ' '.join(t.text_as_string for t in sorted(line, key=lambda t: t.left)).split()
+                if not words or len(words) > RUNNING_HEAD_MAX_WORDS:
+                    continue
+                for word in {words[0], words[-1]}:
+                    number = word.strip('-–—.,:;()[]|')
+                    if number.isdecimal() and number.isascii():
+                        candidates.append((idx, page, line, at_top, int(number)))
+                        in_candidates.update(id(t) for t in line)
+            # Where the body text of this page starts and ends
+            body = [t for t in page.texts if id(t) not in in_candidates]
+            if body:
+                body_top, body_bottom = min(t.top for t in body), max(t.bottom for t in body)
+                body_tops[body_top] = body_tops.get(body_top, 0) + 1
+                body_bottoms[body_bottom] = body_bottoms.get(body_bottom, 0) + 1
+        if not candidates:
+            return
+        # Where the body text usually starts and ends on pages
+        usual_top = max(body_tops, key=lambda k: (body_tops[k], -k)) if body_tops else 0
+        usual_bottom = max(body_bottoms, key=lambda k: (body_bottoms[k], k)) if body_bottoms else 0
+        found: dict[int, list[tuple[Page, list[Text]]]] = {}
+        for idx, page, line, at_top, number in candidates:
+            if at_top and max(t.bottom for t in line) > usual_top:
+                continue
+            if not at_top and min(t.top for t in line) < usual_bottom:
+                continue
+            found.setdefault(number - idx, []).append((page, line))
+        min_pages = max(RUNNING_HEAD_MIN_PAGES, RUNNING_HEAD_MIN_FRACTION * len(self.pages))
+        for lines in found.values():
+            if len({id(page) for page, line in lines}) >= min_pages:
+                for page, line in lines:
+                    for t in line:
+                        if t in page.texts:
+                            page.texts.remove(t)
+
     def remove_header_footer(self) -> None:
         # Remove any header/footer lines from all pages
         for page in self.pages:
@@ -2167,13 +2507,17 @@ class PDFDocument:
                 if page.texts:
                     if candidate:
                         last_line = candidate.texts[-1]
-                    if candidate and last_line.bottom > orphan_space and page.texts[0].indented == 0:
+                    # The continuation of a list item is at its hanging indent
+                    continues_item = (
+                        candidate is not None and last_line.hanging_left is not None and abs(page.texts[0].left - last_line.hanging_left) <= SAME_INDENT
+                    )
+                    if candidate and last_line.bottom > orphan_space and (page.texts[0].indented == 0 or continues_item):
                         merged_text = page.texts[0]
                         top = merged_text.top
                         # How much space in pixels was at the end of the last line?
                         # If the book is justified text, any space could mean end-of-para
                         # So, how to check for a justified book/page?
-                        last_spare = candidate.textwidth - last_line.final_width  # Pixels
+                        last_spare = candidate.right_margin - last_line.last_right  # Pixels
                         # How big is the first word on the next line?
                         merged_first = re.match(r'^([^ ]+)\s', merged_text.text_as_string)
                         if merged_first is not None:
@@ -2191,7 +2535,7 @@ class PDFDocument:
                             top <= min_top + page.average_text_height
                             and merged_text.tag == 'p'
                             and 'href=' not in merged_text.raw
-                            and merged_text.left < stats_left_min + merged_text.average_character_width
+                            and (merged_text.left < stats_left_min + merged_text.average_character_width or continues_item)
                             # Centered text such as an image caption or a heading is not part of a paragraph
                             and last_line.align != 'C'
                             and merged_text.align != 'C'

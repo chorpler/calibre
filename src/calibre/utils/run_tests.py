@@ -835,7 +835,13 @@ def find_tests(which_tests: Collection[str] | None = None, exclude_tests: Collec
         from calibre.ebooks.txt.txtml import find_tests
 
         a(find_tests())
+        from calibre.ebooks.oeb.transforms.structure import find_tests
+
+        a(find_tests())
         from calibre.ebooks.rtf.rtfml import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.conversion.plugins.rtf_input import find_tests
 
         a(find_tests())
         from calibre.ebooks.metadata.rtf import find_tests
@@ -848,6 +854,12 @@ def find_tests(which_tests: Collection[str] | None = None, exclude_tests: Collec
 
         a(find_tests())
         from calibre.ebooks.metadata.epub import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.metadata.xmp import find_tests
+
+        a(find_tests())
+        from calibre.utils.localunzip import find_tests
 
         a(find_tests())
         from calibre.utils.xml_parse import find_tests
@@ -977,6 +989,9 @@ def find_tests(which_tests: Collection[str] | None = None, exclude_tests: Collec
 
         a(find_tests())
         from calibre.devices.kobo.test_driver import find_tests
+
+        a(find_tests())
+        from calibre.devices.usbms.test_driver import find_tests
 
         a(find_tests())
         from calibre.utils.safe_atexit import find_tests

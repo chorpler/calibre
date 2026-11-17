@@ -23,6 +23,7 @@ from qt.core import (
     QHBoxLayout,
     QHideEvent,
     QIcon,
+    QKeyEvent,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -841,22 +842,36 @@ def issue_html(issue: Issue) -> str:
     return ans
 
 
-def select_issue_in_editor(editor: TextEdit, default_lang: str, ref: ParagraphRef, issue: Issue) -> bool:
-    """Select the text of the issue in the editor, returning False if it no longer exists"""
+class SelectedIssue(NamedTuple):
+    # The paragraph containing an issue selected in the editor
+    paragraph: Paragraph
+    # The sourceline address (line number and tag names) of the innermost
+    # element containing the start of the paragraph, used to find the
+    # paragraph in the preview. The line number is None if it is not known.
+    sourceline_address: tuple[int | None, list[str] | None]
+
+
+def select_issue_in_editor(editor: TextEdit, default_lang: str, ref: ParagraphRef, issue: Issue) -> SelectedIssue | None:
+    """Select the text of the issue in the editor, returning None if it no longer exists"""
     source = editor.toPlainText()
     p = relocate(extract_paragraphs(source, default_lang), ref)
     if p is None:
-        return False
+        return None
     ranges = issue_source_ranges(p, issue)
     if not ranges:
-        return False
+        return None
     um = Utf16Map(source)
+    # The containing element is found from the syntax highlighting data, so
+    # make sure it is up to date
+    editor.highlighter.join()
     c = editor.textCursor()
+    c.setPosition(um.to_utf16(p.source_span[0]))
+    sourceline_address = editor.current_tag(for_position_sync=False, cursor=c)
     c.setPosition(um.to_utf16(ranges[0][0]))
     c.setPosition(um.to_utf16(ranges[-1][1]), QTextCursor.MoveMode.KeepAnchor)
     editor.setTextCursor(c)
     editor.centerCursor()
-    return True
+    return SelectedIssue(p, sourceline_address)
 
 
 # }}}
@@ -928,18 +943,27 @@ class SuggestionRow(QWidget):
     def __init__(self, sentence: str, suggestion: Suggestion, apply: Callable[[], None], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.suggestion = suggestion
+        self.apply_callback = apply
         l = QHBoxLayout(self)
         l.setContentsMargins(0, 0, 0, 0)
-        self.label = la = QLabel(f'<b>{prepare_string_for_xml(kind_name(suggestion.kind))}:</b> {suggestion_html(sentence, suggestion.edits)}', self)
+        # The apply link is inline at the end of the text, rather than a
+        # button, so that the suggestion can use the full width of the panel
+        self.label = la = QLabel(
+            f'<b>{prepare_string_for_xml(kind_name(suggestion.kind))}:</b> {suggestion_html(sentence, suggestion.edits)}'
+            f' <a href="apply:" style="text-decoration: none">{prepare_string_for_xml(_("Apply"))}</a>',
+            self,
+        )
         la.setWordWrap(True)
         la.setTextFormat(Qt.TextFormat.RichText)
-        la.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        la.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse | Qt.TextInteractionFlag.LinksAccessibleByKeyboard
+        )
+        la.linkActivated.connect(self.link_activated)
         l.addWidget(la, stretch=1)
-        self.apply_button = b = QPushButton(QIcon.ic('ok.png'), _('&Apply'), self)
-        b.setAutoDefault(False)
-        b.setToolTip('<p>' + _('Rewrite the sentence as suggested'))
-        b.clicked.connect(apply)
-        l.addWidget(b, alignment=Qt.AlignmentFlag.AlignTop)
+
+    def link_activated(self, link: str) -> None:
+        if link == 'apply:':
+            self.apply_callback()
 
 
 class SuggestionsWidget(QWidget):
@@ -1871,6 +1895,17 @@ class GrammarCheck(Dialog):
         assert hh is not None
         tprefs['grammar-check-table-state'] = bytearray(hh.saveState())
         self.cancel()
+
+    def keyPressEvent(self, a0: QKeyEvent | None) -> None:
+        if a0 is not None and a0.key() in (Qt.Key.Key_Enter, Qt.Key.Key_Return):
+            # Do not close the dialog on Enter, instead behave like a double click
+            # in the issues list. The replacements list and replacement box
+            # handle Enter themselves via their activated/returnPressed signals.
+            if self.focusWidget() is self.issues_view:
+                self.show_current_issue()
+            a0.accept()
+            return
+        Dialog.keyPressEvent(self, a0)
 
     def accept(self) -> None:
         self.save_table_state()

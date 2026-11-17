@@ -295,6 +295,37 @@ class Structure(BaseTest):
             landmarks,
         )
 
+    def test_split_on_page_breaks_in_conversion(self) -> None:
+        from calibre.ebooks.conversion.plumber import Plumber
+        from calibre.utils.logging import DevNull
+
+        css = '<style>h2 { page-break-before: always } .end { page-break-after: always }</style>'
+        flat = '<p>intro</p><h2>A</h2><p class="end">a</p><p>mid</p><h2 id="b">B</h2><p pb_order="1" pb_before="1">b</p>'
+        expected = ['intro', 'Aa', 'mid', 'Bb']
+        counter = count()
+
+        def convert(body: str) -> list[str]:
+            n = next(counter)
+            src = os.path.join(self.tdir, f'split-{n}.html')
+            with open(src, 'w') as f:
+                f.write(f'<html><head><title>t</title>{css}</head><body>{body}</body></html>')
+            out = os.path.join(self.tdir, f'split-{n}.epub')
+            plumber = Plumber(src, out, DevNull())
+            plumber.merge_ui_recommendations([('no_default_epub_cover', True, 3)])
+            plumber.run()
+            c = get_container(out, tdir=os.path.join(self.tdir, f'split-out-{n}'))
+            texts = []
+            for name, is_linear in c.spine_names:
+                root = c.parsed(name)
+                self.assertFalse(root.xpath('//*[@pb_order or @pb_before]'), 'Temporary attributes not removed')
+                texts.append(''.join(xml2text(x) for x in root.xpath('//*[local-name()="body"]')).replace('\n', '').replace(' ', ''))
+            return texts
+
+        # All split points are children of <body>
+        self.assertEqual(expected, convert(flat))
+        # Split points inside a wrapper, cannot be split at body children
+        self.assertEqual(expected, convert(f'<div class="wrapper">{flat}</div>'))
+
     def test_guide_reference_without_type(self) -> None:
         # Guide references with no type must not cause a crash, see
         # https://bugs.launchpad.net/bugs/2170400
@@ -492,6 +523,16 @@ class Structure(BaseTest):
         self.assertEqual(problems, {MissingLanguage})
         self.assertNotIn(MissingAltText, problems)
 
+        # Setting the cover again replaces the generated cover page, whose SVG
+        # title is not content, instead of adding another cover page
+        for ver, no_svg in ((2, False), (3, False), (2, True), (3, True)):
+            c = self.create_epub([cmi('a.html', '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>a</p></body></html>')], ver=ver)
+            for i in range(3):
+                set_cover(c, get_image_path('lt.png'), options={'no_svg': no_svg})
+                titlepage = find_cover_page(c)
+                self.assertEqual([name for name, linear in c.spine_names], [titlepage, 'a.html'], (ver, no_svg, i))
+                self.assertEqual(len([n for n in c.name_path_map if n.endswith('.png')]), 1, (ver, no_svg, i))
+
     def test_mark_sentences(self) -> None:
         from html5_parser import parse
         from lxml import html
@@ -624,6 +665,76 @@ class Structure(BaseTest):
         self.assertEqual(root.xpath('//*/@aria-labelledby'), [f'{nid} _y'])
         self.assertEqual(root.xpath('//*/@aria-describedby'), [nid])
         self.assertEqual(root.xpath('//*/@for'), [nid])
+
+    def test_batch_fixes(self) -> None:
+        "Test that fixing errors in batches gives the same result as fixing them one by one"
+        from calibre.ebooks.oeb.polish.check.links import CaseMismatch, DanglingLink, check_link_destinations, check_links
+        from calibre.ebooks.oeb.polish.check.main import fix_errors
+        from calibre.ebooks.oeb.polish.check.parsing import InvalidId, check_ids
+
+        def html(body: str, head: str = '') -> str:
+            return f'<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/>{head}</head><body>{body}</body></html>'
+
+        ncx = (
+            '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head/><docTitle><text>x</text></docTitle><navMap>'
+            '<navPoint id="1np" playOrder="1"><navLabel><text>a</text></navLabel><content src="a.html#1"/></navPoint>'
+            '<navPoint id="2np" playOrder="2"><navLabel><text>b</text></navLabel><content src="b.html#2"/></navPoint>'
+            '</navMap></ncx>'
+        )
+        manifest = [
+            cmi(
+                'a.html',
+                html(
+                    '<p id="1">a</p><p id="1 a">b</p><p id="1_a">c</p><p id="id1_a">d</p><a href="#1">x</a><a href="b.html#2">y</a>'
+                    '<a href="gone.html">g</a><a href="gone.html#q">g</a><a href="B.html">c</a><a href="B.html">c</a><img src="IMG.png" alt="i"/>'
+                    '<div aria-labelledby="1 2"><label for="1">l</label></div>',
+                    '<style>#\\31 { color: red } p { background: url(gone.png) }</style>',
+                ),
+            ),
+            cmi(
+                'b.html',
+                html('<p id="2">b</p><p id="1">c</p><a href="a.html#1">l</a><a href="C.html#3x">c</a><span style="background: url(missing.png)">s</span>'),
+            ),
+            cmi('c.html', html('<p id="3x">c</p><a href="gone.html">g</a>')),
+            cmi('img.png', b'\x89PNG\r\n\x1a\n'),
+            cmi('s.css', '#\\31 { color: red }\n#\\32 , #\\33 x { color: blue }\np { background: url(gone2.png) }'),
+            cmi('toc.ncx', ncx),
+        ]
+        batch_types = (InvalidId, CaseMismatch, DanglingLink)
+
+        def errors(c: Container) -> list[BaseError]:
+            return [e for e in check_links(c) + check_ids(c) if isinstance(e, batch_types)]
+
+        def contents(c: Container) -> dict[str, bytes]:
+            for name in c.mime_map:
+                c.commit_item(name, keep_parsed=False)
+            return {name: c.raw_data(name, decode=False) for name in c.mime_map}
+
+        initial = errors(self.create_epub(manifest, ver=2))
+        self.assertEqual({type(e) for e in initial}, set(batch_types))
+        self.assertGreater(len(initial), 10)
+
+        def gui_order(errs: Sequence[BaseError]) -> list[BaseError]:
+            # The order in which the Check book tool passes errors to fix_errors()
+            return sorted(errs, key=lambda e: (100 - e.level, e.name))
+
+        for order in (list, lambda errs: list(reversed(errs)), gui_order):
+            # CaseMismatch errors are always fixed first, the rest in order
+            one_by_one = self.create_epub(manifest, ver=2)
+            errs = order(errors(one_by_one))
+            changed = False
+            for err in [e for e in errs if isinstance(e, CaseMismatch)] + [e for e in errs if not isinstance(e, CaseMismatch)]:
+                if err(one_by_one) is not False:
+                    changed = True
+            self.assertTrue(changed)
+            batched = self.create_epub(manifest, ver=2)
+            self.assertTrue(fix_errors(batched, order(errors(batched))))
+            self.assertEqual(contents(one_by_one), contents(batched))
+            self.assertEqual([str(e) for e in errors(batched)], [])
+            # The link with the wrong case must point to the renamed id
+            self.assertEqual([str(e) for e in check_link_destinations(batched)], [])
+            self.assertIn('c.html#id3x', batched.parsed('b.html').xpath('//*[local-name()="a"]/@href'))
+            self.assertFalse(fix_errors(batched, order(initial)))
 
     def test_dangling_id_reference(self) -> None:
         from calibre.ebooks.oeb.polish.check.main import fix_errors
